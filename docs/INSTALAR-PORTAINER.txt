@@ -1,0 +1,162 @@
+﻿===============================================================================
+  DIAG-VIEWER - INSTALAÇÃO E ATUALIZAÇÃO NO PORTAINER
+  Remoção de hardware · Laudos de manutenção · Equipamentos
+===============================================================================
+
+Método usado: imagem pronta node:22-alpine + código numa pasta do servidor.
+Não precisa montar imagem nem enviar .tar.
+
+
+-------------------------------------------------------------------------------
+PASSO 1 - Copiar o código para o servidor
+-------------------------------------------------------------------------------
+Copie a pasta diag-viewer para /opt/diag-viewer no servidor. Do Windows:
+
+  scp -r C:\diag\diag-viewer usuario@IP-DO-SERVIDOR:/opt/
+
+(ou WinSCP / pasta compartilhada). Precisam estar lá: server.js e a pasta web\.
+
+
+-------------------------------------------------------------------------------
+PASSO 2 - Gerar os tokens
+-------------------------------------------------------------------------------
+No PowerShell, rode duas vezes:
+
+  -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 40 | % {[char]$_})
+
+  UPLOAD_TOKEN = ....................  (vai no diag-servidor.cfg dos scripts)
+  READ_TOKEN   = ....................  (pedido na interface; também protege
+                                        laudos e anexos)
+
+
+-------------------------------------------------------------------------------
+PASSO 3 - Criar a stack
+-------------------------------------------------------------------------------
+Portainer > Stacks > Add stack > Name: diag-viewer > Web editor:
+
+-------------------------------- copiar daqui ---------------------------------
+services:
+  diag-viewer:
+    image: node:22-alpine
+    container_name: diag-viewer
+    working_dir: /app
+    command: ["node", "server.js"]
+    ports:
+      - "80:8080"
+    environment:
+      PORT: 8080
+      DATA_DIR: /data
+      UPLOAD_TOKEN: ${UPLOAD_TOKEN}
+      READ_TOKEN: ${READ_TOKEN}
+      MAX_MB: ${MAX_MB:-500}
+      ANEXO_MAX_MB: ${ANEXO_MAX_MB:-25}
+      TZ: America/Sao_Paulo
+    volumes:
+      - /opt/diag-viewer:/app:ro
+      - coletas:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/info"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  coletas:
+--------------------------------- até aqui -----------------------------------
+
+Environment variables:
+  UPLOAD_TOKEN = (token de envio)
+  READ_TOKEN   = (token de leitura)
+  MAX_MB       = 500     (tamanho máximo de cada coleta)
+  ANEXO_MAX_MB = 25      (tamanho máximo de cada foto/PDF anexado)
+
+Deploy the stack. Conferir:
+  - Containers > diag-viewer: "running" e depois "healthy".
+  - Logs: "Visualizador ouvindo na porta 8080. Dados em /data".
+  - Navegador: http://IP-DO-SERVIDOR  (pede o READ_TOKEN).
+
+Docker do servidor em Windows: troque /opt/diag-viewer por C:/diag/diag-viewer.
+
+
+-------------------------------------------------------------------------------
+PASSO 4 - Firewall
+-------------------------------------------------------------------------------
+Libere TCP 80 no servidor e no firewall de rede das VLANs dos PCs
+para o IP do servidor.
+  Linux (ufw):   sudo ufw allow 80/tcp
+  Windows:       New-NetFirewallRule -DisplayName "diag-viewer 80" -Direction Inbound -Protocol TCP -LocalPort 80 -Action Allow
+
+Se der "port is already allocated": algo já usa a porta 80
+(Linux: sudo ss -ltnp | grep ':80 '   Windows: netstat -ano | findstr :80).
+
+
+-------------------------------------------------------------------------------
+PASSO 5 - Página de downloads
+-------------------------------------------------------------------------------
+Abra no navegador (ou pelo link "Downloads" no topo do site):
+
+  http://IP-DO-SERVIDOR/download/
+
+Diagnóstico do computador (diag-diagnostico.zip) - manutenção
+  diagnostico.bat + diagnostico.ps1 + diag-servidor.cfg já preenchido.
+  Rode diagnostico.bat como administrador, [5] Executar (1 a 3 minutos).
+  [4] Testes profundos (opcional): DISM/SFC, chkdsk, superficie do disco,
+  WinSAT, memoria, estresse do processador, rede prolongada, antivirus.
+  Coleta saúde de discos, memória, vídeo, telas azuis, erros, dispositivos
+  com problema, serviços, impressoras, rede, ativação, antivírus, programas.
+  No site, abra o diagnóstico e use "Criar laudo de manutenção".
+
+Remoção de hardware (diag-remocao.zip)
+  diag-hardware.bat + diag-hardware.ps1 + diag-servidor.cfg já preenchido.
+  Rode diag-hardware.bat como administrador, [5] Executar.
+
+  Os dois pacotes pedem o READ_TOKEN, porque o .cfg traz o token de envio.
+  Guarde-os com cuidado.
+
+Agente diag (agente-diag.zip) - só para assinatura digital de laudos
+  Nos PCs onde for assinar com certificado (A1 instalado ou token A3):
+  extraia e rode instalar-agente.bat (sem administrador; instala só para o
+  usuário do Windows). Na primeira assinatura o navegador pergunta se pode
+  abrir o "Assinador diag": marque "sempre permitir".
+
+
+-------------------------------------------------------------------------------
+ATUALIZAR O SERVIDOR
+-------------------------------------------------------------------------------
+1. Copie de novo server.js e a pasta web\ para /opt/diag-viewer
+   (o mesmo comando scp do passo 1).
+2. Portainer > Containers > diag-viewer > Restart.
+   Os scripts da página de downloads (pasta web/coleta) são atualizados
+   junto; baixe de novo os pacotes para os pendrives.
+Coletas, laudos e anexos ficam no volume e não são afetados.
+
+
+-------------------------------------------------------------------------------
+DADOS E BACKUP
+-------------------------------------------------------------------------------
+Volume diag-viewer_coletas (/data no container):
+  coletas/            coletas recebidas (.zip + .json) e seus anexos
+  laudos/             laudos (<ano>-<nº>.json), revisões anteriores (.bak),
+                      anexos e o contador da numeração (seq-<ano>.txt)
+  modelos/            modelos de laudo (os 5 padrão são criados na 1ª execução)
+  laudos/*.assinado.pdf      PDF assinado digitalmente (versão oficial)
+  laudos/*.via-assinada.*    digitalização da via assinada à mão
+  audit.log           envios, recusas, downloads, laudos criados/alterados,
+                      anexos adicionados/removidos (com IP e horário)
+
+Backup (terminal do servidor):
+  docker run --rm -v diag-viewer_coletas:/data -v "$PWD":/b alpine tar czf /b/diag-backup.tgz -C /data .
+
+
+-------------------------------------------------------------------------------
+PROBLEMAS COMUNS
+-------------------------------------------------------------------------------
+"Cannot find module '/app/server.js'"  -> código não está em /opt/diag-viewer.
+Script: "Token de envio inválido"      -> TOKEN do cfg diferente do UPLOAD_TOKEN.
+Script: "Envio desativado no servidor" -> UPLOAD_TOKEN vazio na stack.
+Laudos: "Requer o servidor"            -> abra pelo endereço do servidor, não
+                                          pelo arquivo index.html local.
+
+Segurança: tráfego HTTP, use só na rede interna.
+===============================================================================

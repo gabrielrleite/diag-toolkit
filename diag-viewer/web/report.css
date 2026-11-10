@@ -1,0 +1,153 @@
+/* ================================================================
+   Relatório técnico (aba Relatório + impressão)
+   O "papel" é sempre claro, mesmo no tema escuro.
+   ================================================================ */
+
+.rep-form .rep-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 14px;
+}
+.rep-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.rep-form input, .rep-form textarea { font-weight: 400; color: var(--ink); }
+.rep-form textarea {
+  font: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; resize: vertical;
+}
+.rep-obs { margin-top: 10px; }
+
+.paper {
+  --p-ink: #1a1d21;
+  --p-muted: #5d6673;
+  --p-line: #cfd5dd;
+  --p-soft: #f3f5f8;
+  --p-accent: #1f3f8f;
+  --p-bad: #b42318;
+  --p-bad-soft: #fdecea;
+
+  width: 210mm; max-width: 100%;
+  margin: 0 auto 30px;
+  padding: 18mm 16mm 16mm;
+  background: #fff; color: var(--p-ink);
+  box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 8px 30px rgba(0,0,0,.08);
+  border-radius: 4px;
+  font: 10.5pt/1.45 "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+}
+.paper h1 { font-size: 20pt; margin: 2px 0 0; letter-spacing: -.2px; color: var(--p-ink); }
+.paper h2 {
+  font-size: 11.5pt; text-transform: uppercase; letter-spacing: .6px; color: var(--p-accent);
+  margin: 18px 0 8px; padding-bottom: 4px; border-bottom: 1.5px solid var(--p-accent);
+}
+.paper h3 { font-size: 11pt; margin: 14px 0 6px; }
+.paper h4 { font-size: 9.5pt; margin: 12px 0 4px; color: var(--p-muted); font-weight: 600; }
+.paper section { margin-bottom: 4px; }
+
+.r-head {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+  padding-bottom: 12px; border-bottom: 3px solid var(--p-ink); margin-bottom: 6px;
+}
+.r-org { font-size: 9pt; text-transform: uppercase; letter-spacing: 1px; color: var(--p-muted); font-weight: 600; }
+.r-sub { color: var(--p-muted); font-size: 10.5pt; }
+.paper table.r-meta { width: auto; border-collapse: collapse; font-size: 9pt; min-width: 190px; flex-shrink: 0; }
+.r-meta th { text-align: left; color: var(--p-muted); font-weight: 600; padding: 2px 10px 2px 0; }
+.r-meta td { padding: 2px 0; }
+
+.paper table { width: 100%; border-collapse: collapse; }
+.paper th { position: static; }
+.r-kv { font-size: 9.5pt; margin: 4px 0 8px; }
+.r-kv th, .r-kv td { border: 1px solid var(--p-line); padding: 4px 7px; vertical-align: top; text-align: left; }
+.r-kv th { background: var(--p-soft); color: var(--p-muted); font-weight: 600; width: 22%; white-space: nowrap; }
+
+.r-table { font-size: 8.5pt; margin: 4px 0; }
+.r-table th { background: var(--p-ink); color: #fff; font-weight: 600; text-align: left; padding: 4px 6px; }
+.r-table td { border-bottom: 1px solid var(--p-line); padding: 3px 6px; vertical-align: top; }
+.r-table tr:nth-child(even) td { background: #fafbfc; }
+.r-table tr.r-in td { background: var(--p-bad-soft); }
+.r-table td:first-child { white-space: nowrap; }
+.r-hash td:last-child { word-break: break-all; }
+
+.r-mono { font-family: Consolas, "Courier New", monospace; font-size: 8.5pt; word-break: break-all; }
+.r-small { font-size: 8.5pt; color: var(--p-muted); }
+.r-dt { font-family: Consolas, "Courier New", monospace; font-size: 8.5pt; white-space: nowrap; }
+.r-bad { color: var(--p-bad); }
+.r-list { margin: 4px 0; padding-left: 20px; }
+.r-list li { margin-bottom: 6px; }
+
+.r-window {
+  border: 1.5px solid var(--p-bad); background: var(--p-bad-soft); border-radius: 4px;
+  padding: 8px 12px; margin: 8px 0;
+}
+.r-window-l { font-size: 8.5pt; text-transform: uppercase; letter-spacing: .6px; color: var(--p-bad); font-weight: 700; }
+.r-window-v { font-size: 13pt; font-weight: 700; margin: 2px 0; }
+.r-window-s { font-size: 9pt; color: var(--p-muted); }
+
+.r-block { margin-bottom: 10px; }
+.r-obs { white-space: normal; border-left: 3px solid var(--p-line); padding: 4px 10px; margin: 4px 0; }
+
+.r-sign {
+  display: flex; justify-content: space-between; align-items: flex-end; gap: 20px;
+  margin-top: 46px; break-inside: avoid;
+}
+.r-sign-line { width: 60%; border-top: 1px solid var(--p-ink); padding-top: 4px; text-align: center; }
+.r-sign-name { font-weight: 600; }
+.r-sign-role { font-size: 9.5pt; }
+.r-sign-date { font-size: 10pt; }
+.r-foot { margin-top: 18px; padding-top: 6px; border-top: 1px solid var(--p-line); text-align: center; }
+
+@media screen and (max-width: 700px) {
+  .paper { padding: 16px; font-size: 10pt; }
+  .r-head { flex-direction: column; }
+  .r-kv th { width: auto; white-space: normal; }
+}
+
+/* ------------------------------------------------------------ laudo */
+.paper { position: relative; }
+.paper.marca::before {
+  content: attr(data-marca); position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%) rotate(-30deg);
+  font-size: 72pt; font-weight: 800; letter-spacing: 6px; color: rgba(180, 35, 24, .10); pointer-events: none; white-space: nowrap;
+}
+.r-conc.ok { border-color: #18794e; background: #e8f6ee; }
+.r-conc.ok .r-window-l { color: #18794e; }
+.r-conc.warn { border-color: #9a5b00; background: #fdf3e1; }
+.r-conc.warn .r-window-l { color: #9a5b00; }
+.r-conc .r-window-s { color: var(--p-ink); margin-top: 4px; }
+
+/* assinaturas do laudo (várias) */
+.r-encaminha { margin: 18px 0 0; font-style: italic; }
+.r-date-line { text-align: right; margin: 26px 0 0; font-size: 10pt; }
+.r-signs { display: grid; grid-template-columns: repeat(auto-fit, minmax(62mm, 1fr)); gap: 40px 34px; margin-top: 46px; break-inside: avoid; }
+.r-sign-block { border-top: 1px solid var(--p-ink); padding-top: 4px; text-align: center; }
+
+/* ------------------------------------------------------------ anexos */
+.r-anexos { margin-top: 28px; padding-top: 14px; border-top: 3px solid var(--p-ink); }
+.r-anexo { margin: 0 0 18px; break-inside: avoid; }
+.r-anexo figcaption { font-size: 11pt; margin-bottom: 6px; }
+.r-anexo img { display: block; max-width: 100%; max-height: 110mm; margin: 0 auto 6px; border: 1px solid var(--p-line); object-fit: contain; }
+.r-pdf { border: 1px dashed var(--p-line); padding: 18px; text-align: center; margin-bottom: 6px; }
+
+/* ------------------------------------------------------------ impressão */
+@page {
+  size: A4;
+  margin: 14mm 13mm 16mm;
+  @bottom-right { content: "Página " counter(page) " de " counter(pages); font: 8pt "Segoe UI", Arial, sans-serif; color: #5d6673; }
+  @bottom-left  { content: "Relatório técnico – diagnóstico de hardware"; font: 8pt "Segoe UI", Arial, sans-serif; color: #5d6673; }
+}
+
+@media print {
+  html, body { background: #fff !important; }
+  body * { visibility: hidden; }
+  .paper, .paper * { visibility: visible; }
+  .top, .tabs, .machine, #home, .rep-form, .overlay, .noprint { display: none !important; }
+  main { padding: 0 !important; max-width: none !important; }
+  .tab { display: none !important; }
+  #tab-relatorio { display: block !important; }
+  .paper {
+    width: auto; margin: 0; padding: 0; box-shadow: none; border-radius: 0;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .paper h2 { break-after: avoid; }
+  .paper h3, .paper h4 { break-after: avoid; }
+  .r-kv, .r-window, .r-break-avoid, .r-sign { break-inside: avoid; }
+  .r-table tr { break-inside: avoid; }
+  .r-table thead { display: table-header-group; }
+  .r-anexos { break-before: page; border-top: 0; margin-top: 0; padding-top: 0; }
+  .paper.marca::before { position: fixed; }
+  #mod-laudos .panel { display: none !important; }
+}

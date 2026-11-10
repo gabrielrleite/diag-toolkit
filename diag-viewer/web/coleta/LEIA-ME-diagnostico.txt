@@ -1,0 +1,20 @@
+DIAGNOSTICO DO COMPUTADOR (manutencao)
+
+1. Copie esta pasta para o pendrive (os arquivos juntos).
+2. No PC, de dois cliques em diagnostico.bat (pede administrador).
+3. [5] Executar diagnostico. O rapido leva de 1 a 3 minutos.
+   [4] Testes profundos (opcional, de minutos a horas):
+   integridade do Windows (DISM/SFC), chkdsk, leitura completa do
+   disco, WinSAT, memoria RAM, estresse do processador com
+   temperatura, rede prolongada, antivirus, relatorio de energia.
+   [M] no menu de testes agenda o teste de memoria do Windows.
+4. Com o diag-servidor.cfg presente, o resultado vai para o servidor e
+   aparece na tela inicial do site, pronto para vincular a um laudo.
+
+Coleta: hardware, discos (saude, temperatura, desgaste), memoria, video,
+telas azuis, erros de hardware/disco, dispositivos com problema, servicos,
+impressoras, rede (gateway, DNS, dominio, internet), ativacao, antivirus,
+atualizacoes, programas instalados e erros do log do Windows.
+Nada e alterado no computador.
+
+Guarde o diag-servidor.cfg com cuidado: ele contem o token de envio.

@@ -1,0 +1,2 @@
+pdfmake 0.2.15 MIT
+pdf-lib 1.17.1 MIT

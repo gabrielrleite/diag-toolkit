@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Visualizador de Coletas</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+<header class="top noprint">
+  <div class="brand">
+    <strong>Visualizador de Coletas</strong>
+    <span class="muted">diag-hardware</span>
+  </div>
+  <nav class="mods">
+    <a href="#" data-mod="coletas" class="on">Remoção de hardware</a>
+    <a href="#laudos" data-mod="laudos">Laudos de manutenção</a>
+    <a href="#equip" data-mod="equip">Equipamentos</a>
+    <a href="download/" class="ext">Downloads</a>
+  </nav>
+  <div class="actions" id="act-coletas">
+    <button id="btnHome" class="btn ghost" hidden>Coletas</button>
+    <label class="btn">Abrir .zip
+      <input id="inZip" type="file" accept=".zip,.txt" multiple hidden>
+    </label>
+    <label class="btn ghost">Abrir pasta
+      <input id="inDir" type="file" webkitdirectory multiple hidden>
+    </label>
+    <button id="btnPrint" class="btn ghost" disabled>Imprimir relatório</button>
+  </div>
+</header>
+
+<main class="noprint-main">
+ <div id="mod-coletas">
+  <section id="home">
+    <div class="panel dl-banner"><div><b>Scripts</b> · diagnóstico do computador (manutenção), remoção de hardware e Agente diag, já configurados para este servidor.</div>
+      <a class="btn" href="download/">Downloads</a></div>
+    <div id="server" class="panel" hidden></div>
+    <div id="drop" class="drop">
+      <h1>Arraste aqui o .zip da coleta</h1>
+      <p>Pode arrastar junto o arquivo <code>.zip.sha256.txt</code> para conferir a integridade do pacote.</p>
+      <p class="muted">Arquivos abertos por aqui são lidos só neste navegador.</p>
+      <p id="err" class="err" hidden></p>
+    </div>
+  </section>
+
+  <section id="app" hidden>
+    <div id="machine" class="machine noprint"></div>
+
+    <nav class="tabs noprint" id="tabs">
+      <button data-tab="analise" class="on">Análise</button>
+      <button data-tab="linha">Linha do tempo</button>
+      <button data-tab="tabelas">Tabelas</button>
+      <button data-tab="saude">Saúde</button>
+      <button data-tab="integridade">Integridade</button>
+      <button data-tab="relatorio">Relatório</button>
+      <button data-tab="textos">Arquivos de texto</button>
+    </nav>
+
+    <div class="tab on" id="tab-analise"></div>
+    <div class="tab" id="tab-linha"></div>
+    <div class="tab" id="tab-tabelas"></div>
+    <div class="tab" id="tab-integridade"></div>
+    <div class="tab" id="tab-relatorio"></div>
+    <div class="tab" id="tab-saude"></div>
+    <div class="tab" id="tab-textos"></div>
+  </section>
+ </div>
+ <div id="mod-laudos" hidden></div>
+ <div id="mod-equip" hidden></div>
+</main>
+
+<div id="dropOverlay" class="overlay noprint" hidden>Solte para abrir</div>
+<script src="app.js"></script>
+<script src="saude.js"></script>
+<script src="laudos.js"></script>
+<script src="assinatura.js"></script>
+</body>
+</html>

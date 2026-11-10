@@ -1,0 +1,8 @@
+diag-servidor.cfg
+diag_*/
+diag_*.zip
+diag_*.zip.*
+diag-menu.cfg
+diagnostico_*/
+diagnostico_*.zip
+diagnostico_*.zip.*

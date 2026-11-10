@@ -1,0 +1,9 @@
+DIAG-HARDWARE - remocao de hardware (historico de dispositivos, boots e logons)
+
+1. Extraia o .zip (nao rode de dentro do zip) e copie a pasta para o
+   pendrive - os arquivos ficam juntos.
+2. No PC, de dois cliques em diag-hardware.bat (pede administrador).
+3. A opcao [4] Enviar ao servidor ja vem ligada: o diag-servidor.cfg
+   foi gerado pelo site com o endereco e o token de envio.
+
+Guarde o diag-servidor.cfg com cuidado: ele contem o token de envio.

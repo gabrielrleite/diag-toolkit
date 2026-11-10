@@ -1,0 +1,5 @@
+.env
+diag-servidor.cfg
+*.tar
+data/
+node_modules/

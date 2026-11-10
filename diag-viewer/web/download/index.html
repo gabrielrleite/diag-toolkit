@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Downloads · diag</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <strong>Visualizador de Coletas</strong>
+    <span class="muted">Downloads</span>
+  </div>
+  <nav class="mods">
+    <a href="../">Remoção de hardware</a>
+    <a href="../#laudos">Laudos de manutenção</a>
+    <a href="../#equip">Equipamentos</a>
+    <a href="./" class="on">Downloads</a>
+  </nav>
+</header>
+
+<main>
+  <div class="dl-grid">
+    <section class="dl-card">
+      <h3>Diagnóstico do computador</h3>
+      <p class="muted" style="margin:0">Para manutenção: saúde dos discos, memória, vídeo, telas azuis, erros de hardware,
+        dispositivos com problema, serviços, impressoras, rede (gateway, DNS, domínio, internet), ativação, antivírus e programas.
+        O resultado é usado nos laudos.</p>
+      <ul>
+        <li>Extraia o .zip e dê dois cliques em <b>diagnostico.bat</b> (pede administrador).</li>
+        <li>[5] Executar diagnóstico: o rápido leva de 1 a 3 minutos.</li>
+        <li>[4] Testes profundos (opcional): integridade do Windows, chkdsk, superfície do disco, desempenho, memória, estresse do processador, rede prolongada, antivírus. De minutos a horas.</li>
+        <li>O resultado aparece na tela inicial; abra e clique em <b>Criar laudo de manutenção</b>.</li>
+      </ul>
+      <a class="btn" data-pacote="diagnostico" href="../api/coleta/pacote.zip?tipo=diagnostico">Baixar diag-diagnostico.zip</a>
+      <p class="muted dl-note" style="margin:0">Sem envio ao servidor:
+        <a href="../coleta/diagnostico.bat" download>diagnostico.bat</a> +
+        <a href="../coleta/diagnostico.ps1" download>diagnostico.ps1</a> na mesma pasta.</p>
+    </section>
+
+    <section class="dl-card">
+      <h3>Remoção de hardware</h3>
+      <p class="muted" style="margin:0">Histórico de dispositivos (instalação, chegada, remoção), ligações e desligamentos,
+        eventos de PnP e logons, com cópia dos logs do Windows. Inclui também os dados de saúde.</p>
+      <ul>
+        <li>Extraia o .zip e dê dois cliques em <b>diag-hardware.bat</b> (pede administrador).</li>
+        <li>[5] Executar coleta. Pode demorar se o log de Segurança for grande.</li>
+      </ul>
+      <a class="btn" data-pacote="remocao" href="../api/coleta/pacote.zip">Baixar diag-remocao.zip</a>
+      <p class="muted dl-note" style="margin:0">Sem envio ao servidor:
+        <a href="../coleta/diag-hardware.bat" download>diag-hardware.bat</a> +
+        <a href="../coleta/diag-hardware.ps1" download>diag-hardware.ps1</a> na mesma pasta.</p>
+    </section>
+
+    <section class="dl-card">
+      <h3>Agente diag (assinatura de laudos)</h3>
+      <p class="muted" style="margin:0">Só para quem assina laudos com certificado digital instalado no PC
+        (A1 ou token A3). Instala uma vez por usuário do Windows.</p>
+      <ul>
+        <li>Extraia o .zip e rode <b>instalar-agente.bat</b> (não pede administrador).</li>
+        <li>No laudo, clique em <b>Assinar</b>: o Windows mostra os certificados; com A3, pede o PIN.</li>
+        <li>Na primeira vez o navegador pergunta se pode abrir o "Assinador diag": marque <b>sempre permitir</b>.</li>
+        <li>Para remover: <b>desinstalar-agente.bat</b>.</li>
+      </ul>
+      <a class="btn" href="../agente/agente-diag.zip" download>Baixar agente-diag.zip</a>
+    </section>
+  </div>
+
+  <div class="panel dl-token" id="tokBox" hidden>
+    <b>Token de leitura</b> · os pacotes de diagnóstico e remoção já vêm com o <code>diag-servidor.cfg</code>
+    (endereço e token de envio deste servidor), por isso pedem o token de leitura.
+    <div class="filters" style="margin:8px 0 0">
+      <input id="tok" type="password" placeholder="token de leitura" style="min-width:220px">
+      <button class="btn small" id="tokOk">Confirmar e baixar</button>
+    </div>
+  </div>
+  <p id="msg" class="err" hidden></p>
+</main>
+
+<script src="download.js"></script>
+</body>
+</html>
