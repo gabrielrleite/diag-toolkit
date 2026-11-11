@@ -256,7 +256,8 @@ async function anexoRoute(req, res, url, o, aid) {
   const file = path.join(o.dir, aid + ANX_TYPES[meta.tipo]);
 
   if (req.method === 'GET') {
-    const st = await fsp.stat(file);
+    const st = await fsp.stat(file).catch(() => null);
+    if (!st) return json(res, 404, { erro: 'Arquivo do anexo não encontrado no servidor.' });
     res.writeHead(200, {
       ...SEC, 'Content-Type': meta.tipo, 'Content-Length': st.size, 'Cache-Control': 'private, max-age=3600',
       'Content-Disposition': `inline; filename="${meta.nome.replace(/[^\w.\- ]/g, '_')}"`, 'X-Sha256': meta.sha256,
@@ -771,6 +772,7 @@ async function ticketRoute(req, res, ticket, acao) {
   if (!t) { req.resume(); return json(res, 404, { erro: 'Pedido de assinatura expirado ou inválido. Gere de novo no sistema.' }); }
   const L = await lerLaudo(t.id);
   const prep = path.join(LDIR, `${t.id}.preparado.pdf`);
+  if (!L || !fs.existsSync(prep)) { req.resume(); return json(res, 404, { erro: 'Pedido de assinatura expirado ou inválido. Gere de novo no sistema.' }); }
   const M = L && L.modeloSnap ? L.modeloSnap : { titulo: 'Laudo Técnico', rotuloNumero: 'Laudo nº' };
   if (req.method === 'GET' && acao === 'pdf') {
     const st = await fsp.stat(prep);
@@ -865,11 +867,20 @@ async function pacoteColeta(req, res, url) {
     const diag = url.searchParams.get('tipo') === 'diagnostico';
     const cfg = `SERVIDOR=${baseUrl(req)}\r\nTOKEN=${UPLOAD_TOKEN}\r\n`;
     const arquivos = [];
-    const lista = diag ? [['diagnostico.bat'], ['diagnostico.ps1'], ['LEIA-ME-diagnostico.txt', 'LEIA-ME.txt']]
+    const lista = diag ? [['diagnostico.bat'], ['diagnostico.ps1'], ['baixar-sensores.ps1'], ['LEIA-ME-diagnostico.txt', 'LEIA-ME.txt']]
                        : [['diag-hardware.bat'], ['diag-hardware.ps1'], ['LEIA-ME.txt']];
     for (const [n, nomeZip] of lista) {
       const f = path.join(SCRIPTS_DIR, n);
       if (fs.existsSync(f)) arquivos.push({ nome: nomeZip || n, dados: await fsp.readFile(f) });
+    }
+    // LibreHardwareMonitor (tensões, ventoinhas, temperaturas): vai junto se estiver em web/coleta/sensores
+    const sens = path.join(SCRIPTS_DIR, 'sensores');
+    if (diag && fs.existsSync(sens)) {
+      for (const e of await fsp.readdir(sens, { recursive: true, withFileTypes: true })) {
+        if (!e.isFile()) continue;
+        const f = path.join(e.parentPath || e.path, e.name);
+        arquivos.push({ nome: 'sensores/' + path.relative(sens, f).split(path.sep).join('/'), dados: await fsp.readFile(f) });
+      }
     }
     arquivos.push({ nome: 'diag-servidor.cfg', dados: Buffer.from(cfg) });
     const zip = criarZip(arquivos);
@@ -883,7 +894,8 @@ async function pacoteColeta(req, res, url) {
 
 // ------------------------------------------------------------------ estaticos
 async function serveStatic(req, res, url) {
-  let rel = decodeURIComponent(url.pathname);
+  let rel;
+  try { rel = decodeURIComponent(url.pathname); } catch { res.writeHead(400, SEC); return res.end(); }
   if (rel === '/' || rel === '') rel = '/index.html';
   if (rel.endsWith('/')) rel += 'index.html';
   const file = path.normalize(path.join(WEB, rel));

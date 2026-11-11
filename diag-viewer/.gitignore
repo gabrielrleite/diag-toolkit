@@ -3,3 +3,4 @@ data/
 node_modules/
 *.zip
 !web/agente/agente-diag.zip
+web/coleta/sensores/

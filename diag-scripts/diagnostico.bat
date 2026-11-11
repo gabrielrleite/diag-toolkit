@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 title Diagnostico do computador - %COMPUTERNAME%
-mode con: cols=90 lines=36 >nul 2>&1
+mode con: cols=90 lines=42 >nul 2>&1
 
 rem ============================================================
 rem  diagnostico.bat
@@ -72,7 +72,7 @@ set "ENVIAR=0"
 if defined SRV set "ENVIAR=1"
 rem testes profundos: 0 = nao, 1 = sim (superficie e antivirus: 0/1/2)
 set "T_SIS=0" & set "T_DSK=0" & set "T_SUP=0" & set "T_WIN=0" & set "T_MEM=0"
-set "T_CPU=0" & set "T_REDE=0" & set "T_AV=0" & set "T_ENE=0" & set "T_LOG=0"
+set "T_CPU=0" & set "T_REDE=0" & set "T_AV=0" & set "T_ENE=0" & set "T_LOG=0" & set "T_BEN=0"
 set "MIN=10"
 
 rem --- Ultima pasta usada (diag-menu.cfg ao lado do script)
@@ -152,12 +152,14 @@ cls
 call :resumotestes
 echo.
 echo   ==========================================================
-echo     TESTES PROFUNDOS - opcionais, somente leitura
+echo     TESTES PROFUNDOS - opcionais
+echo     Temperaturas, tensoes e ventoinhas sao gravadas durante os testes
 echo   ==========================================================
 call :mk !T_SIS!
 echo     [1] !MK! Integridade do Windows - DISM + SFC ....... 15-40 min
-call :mk !T_DSK!
-echo     [2] !MK! Verificar unidades - chkdsk online ......... 2-15 min
+if "!T_DSK!"=="0" echo     [2] [ ] Verificar unidades - chkdsk
+if "!T_DSK!"=="1" echo     [2] [X] Verificar unidades ............. SO ANALISA, nada e alterado
+if "!T_DSK!"=="2" echo     [2] [X] Verificar unidades ............. analisa e CORRIGE sozinho os erros
 if "!T_SUP!"=="0" echo     [3] [ ] Superficie do disco - leitura completa .... SSD 10-30 min / HD 1-4 h
 if "!T_SUP!"=="1" echo     [3] [X] Superficie do disco ............ disco do sistema
 if "!T_SUP!"=="2" echo     [3] [X] Superficie do disco ............ TODOS os discos internos
@@ -176,19 +178,28 @@ call :mk !T_ENE!
 echo     [9] !MK! Relatorio de energia - powercfg ........... 1 min
 call :mk !T_LOG!
 echo     [L] !MK! Copiar logs do Windows - .evtx
+call :mk !T_BEN!
+echo     [B] !MK! Benchmark - CPU, memoria e disco ........... 1 min
 echo.
 echo     [D] Duracao de memoria, estresse e rede ..... !MIN! min
-echo     [R] Marcar recomendados     [T] Marcar todos     [N] Desmarcar
+echo.
+echo     Perfis prontos:
+echo     [A] Basico ...... benchmark, estresse, memoria, chkdsk - 3 min cada
+echo     [R] Recomendado . + integridade, WinSAT, rede, antivirus - 10 min cada
+echo     [C] Completo .... + superficie do disco do sistema, logs - 20 min cada
+echo     [T] Burn-in ..... tudo, todos os discos, antivirus completo - 60 min cada
+echo     [N] Desmarcar todos
+echo     Os perfis so analisam as unidades; para corrigir, aperte [2] de novo.
 echo     [M] Agendar teste de memoria do Windows - reinicia o PC
 echo.
 if "!NT!"=="0" (echo     Total: nenhum teste marcado) else (echo     Total estimado: cerca de !EST! min!ESTSUP!)
 echo.
 echo     [0] Voltar
 echo   ==========================================================
-choice /c 123456789LDRTNM0 /n /m "    Escolha: "
+choice /c 123456789LBADRCTNM0 /n /m "    Escolha: "
 set "OP=!errorlevel!"
 if "!OP!"=="1" call :tg T_SIS
-if "!OP!"=="2" call :tg T_DSK
+if "!OP!"=="2" set /a "T_DSK=(T_DSK+1)%%3"
 if "!OP!"=="3" set /a "T_SUP=(T_SUP+1)%%3"
 if "!OP!"=="4" call :tg T_WIN
 if "!OP!"=="5" call :tg T_MEM
@@ -197,21 +208,34 @@ if "!OP!"=="7" call :tg T_REDE
 if "!OP!"=="8" set /a "T_AV=(T_AV+1)%%3"
 if "!OP!"=="9" call :tg T_ENE
 if "!OP!"=="10" call :tg T_LOG
-if "!OP!"=="11" goto duracao
+if "!OP!"=="11" call :tg T_BEN
 if "!OP!"=="12" (
-  set "T_SIS=1" & set "T_DSK=1" & set "T_SUP=0" & set "T_WIN=1" & set "T_MEM=1"
-  set "T_CPU=1" & set "T_REDE=1" & set "T_AV=1" & set "T_ENE=1" & set "T_LOG=0"
+  set "T_SIS=0" & set "T_DSK=1" & set "T_SUP=0" & set "T_WIN=0" & set "T_MEM=1"
+  set "T_CPU=1" & set "T_REDE=0" & set "T_AV=0" & set "T_ENE=0" & set "T_LOG=0" & set "T_BEN=1"
+  set "MIN=3"
 )
-if "!OP!"=="13" (
-  set "T_SIS=1" & set "T_DSK=1" & set "T_SUP=2" & set "T_WIN=1" & set "T_MEM=1"
-  set "T_CPU=1" & set "T_REDE=1" & set "T_AV=2" & set "T_ENE=1" & set "T_LOG=1"
-)
+if "!OP!"=="13" goto duracao
 if "!OP!"=="14" (
-  set "T_SIS=0" & set "T_DSK=0" & set "T_SUP=0" & set "T_WIN=0" & set "T_MEM=0"
-  set "T_CPU=0" & set "T_REDE=0" & set "T_AV=0" & set "T_ENE=0" & set "T_LOG=0"
+  set "T_SIS=1" & set "T_DSK=1" & set "T_SUP=0" & set "T_WIN=1" & set "T_MEM=1"
+  set "T_CPU=1" & set "T_REDE=1" & set "T_AV=1" & set "T_ENE=1" & set "T_LOG=0" & set "T_BEN=1"
+  set "MIN=10"
 )
-if "!OP!"=="15" goto memboot
-if "!OP!"=="16" goto menu
+if "!OP!"=="15" (
+  set "T_SIS=1" & set "T_DSK=1" & set "T_SUP=1" & set "T_WIN=1" & set "T_MEM=1"
+  set "T_CPU=1" & set "T_REDE=1" & set "T_AV=1" & set "T_ENE=1" & set "T_LOG=1" & set "T_BEN=1"
+  set "MIN=20"
+)
+if "!OP!"=="16" (
+  set "T_SIS=1" & set "T_DSK=1" & set "T_SUP=2" & set "T_WIN=1" & set "T_MEM=1"
+  set "T_CPU=1" & set "T_REDE=1" & set "T_AV=2" & set "T_ENE=1" & set "T_LOG=1" & set "T_BEN=1"
+  set "MIN=60"
+)
+if "!OP!"=="17" (
+  set "T_SIS=0" & set "T_DSK=0" & set "T_SUP=0" & set "T_WIN=0" & set "T_MEM=0"
+  set "T_CPU=0" & set "T_REDE=0" & set "T_AV=0" & set "T_ENE=0" & set "T_LOG=0" & set "T_BEN=0"
+)
+if "!OP!"=="18" goto memboot
+if "!OP!"=="19" goto menu
 goto profundo
 
 :duracao
@@ -250,10 +274,12 @@ if "%1"=="1" (set "MK=[X]") else (set "MK=[ ]")
 exit /b 0
 
 :resumotestes
-set /a "NT=T_SIS+T_DSK+T_WIN+T_MEM+T_CPU+T_REDE+T_ENE+T_LOG"
+set /a "NT=T_SIS+T_WIN+T_MEM+T_CPU+T_REDE+T_ENE+T_LOG+T_BEN"
+if not "!T_DSK!"=="0" set /a "NT+=1"
 if not "!T_SUP!"=="0" set /a "NT+=1"
 if not "!T_AV!"=="0" set /a "NT+=1"
-set /a "EST=T_SIS*25+T_DSK*8+T_WIN*5+T_MEM*MIN+T_CPU*MIN+T_REDE*MIN+T_ENE+T_LOG+1"
+set /a "EST=T_SIS*25+T_WIN*5+T_MEM*MIN+T_CPU*MIN+T_REDE*MIN+T_ENE+T_LOG+T_BEN+1"
+if not "!T_DSK!"=="0" set /a "EST+=10"
 if "!T_AV!"=="1" set /a "EST+=10"
 if "!T_AV!"=="2" set /a "EST+=90"
 set "ESTSUP="
@@ -433,8 +459,10 @@ if "!NT!"=="0" (
 ) else (
   echo     Testes profundos: !NT! - cerca de !EST! min!ESTSUP!
   echo.
-  echo     Os testes so leem o sistema. Durante o estresse e o teste de
+  echo     Os testes so leem o sistema - o benchmark grava um arquivo
+  echo     temporario de ate 1 GB e apaga. Durante o estresse e o teste de
   echo     memoria o PC fica lento. Notebook: deixe na tomada.
+  if "!T_DSK!"=="2" echo     ATENCAO: o chkdsk vai CORRIGIR os erros que encontrar nas unidades.
   echo     O antivirus pode colocar em quarentena o que encontrar.
   echo     Nao feche esta janela ate terminar.
 )
@@ -457,7 +485,9 @@ if defined DESTINO set "ARGS=!ARGS! -Destino "!DESTINO!""
 set "TL="
 if "!T_SIS!"=="1" set "TL=!TL!,sistema"
 if "!T_DSK!"=="1" set "TL=!TL!,disco"
+if "!T_DSK!"=="2" set "TL=!TL!,disco-corrigir"
 if "!T_WIN!"=="1" set "TL=!TL!,desempenho"
+if "!T_BEN!"=="1" set "TL=!TL!,benchmark"
 if "!T_MEM!"=="1" set "TL=!TL!,memoria"
 if "!T_CPU!"=="1" set "TL=!TL!,estresse"
 if "!T_REDE!"=="1" set "TL=!TL!,rede"

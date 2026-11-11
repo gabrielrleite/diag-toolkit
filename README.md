@@ -18,7 +18,11 @@ Ferramentas de diagnóstico de hardware para PCs Windows, com um servidor web pa
   - serviços, impressoras, rede e conectividade;
   - ativação, antivírus, atualizações, drivers e programas.
 
-  Testes profundos opcionais: DISM/SFC, chkdsk online, leitura completa da superfície do disco, WinSAT, teste de RAM, estresse do processador com temperatura e frequência, rede prolongada, verificação do Defender e relatório de energia.
+  Testes profundos opcionais: DISM/SFC, chkdsk (só análise, ou análise com correção automática dos erros), leitura completa da superfície do disco, WinSAT, benchmark próprio (processador, memória e disco), teste de RAM, estresse do processador com temperatura e frequência, rede prolongada, verificação do Defender e relatório de energia.
+
+  Perfis prontos, do mais básico ao mais completo (`-Perfil` ou menu de testes): `rapido`, `basico` (~12 min), `padrao` (~1 h 15), `completo` e `burnin`.
+
+  Sensores: durante os testes, temperaturas, tensões da fonte, ventoinhas e potência são gravados a cada 5 s em `10_sensores.csv` e aparecem no site com gráfico, mínimo/média/máximo e alertas (tensão fora de ±5%, superaquecimento, ventoinha parada). O Windows sozinho só informa zona térmica ACPI, discos, GPU NVIDIA e bateria; para tensões e ventoinhas rode `baixar-sensores.ps1`, que baixa o [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) (MPL-2.0) para a pasta `sensores/`.
 - **`diag-hardware.bat` / `diag-hardware.ps1`**: histórico de dispositivos (instalação, chegada e remoção), boots, eventos de PnP e logons, com cópia dos logs `.evtx` e hashes SHA-256.
 
 Cada execução gera um `.zip` com hashes e pode enviá-lo ao servidor (`diag-servidor.cfg`).

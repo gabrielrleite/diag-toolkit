@@ -146,6 +146,7 @@ function renderSaude() {
   el.innerHTML = `
   <div class="panel"><h2>Achados automáticos</h2>${achadosHtml(analyzeSaude(s))}</div>
   ${renderProfundo(s)}
+  ${renderSensores(s)}
 
   <div class="panel"><h2>Hardware</h2>
     <div class="kv">
@@ -247,7 +248,7 @@ function snapshotColeta({ id, info, saude, zipHash, recebidoEm }) {
 // ------------------------------------------------------------------ testes profundos e dados detalhados (diagnostico v2)
 const SMART_CRITICOS = [5, 187, 197, 198];
 const SISTEMA_TXT = { Healthy: 'Íntegra', Repairable: 'Corrompida (reparável)', NonRepairable: 'Corrompida (não reparável)' };
-const VOLUME_TXT = { NoErrorsFound: 'Sem erros', ScanNeeded: 'Verificação completa necessária', SpotFixNeeded: 'Correção pontual necessária', FullRepairNeeded: 'Reparo completo necessário' };
+const VOLUME_TXT = { NoErrorsFound: 'Sem erros', ScanErrorsFoundAndFixedOnline: 'Erros no sistema de arquivos encontrados e corrigidos automaticamente', ErrorsFoundNotFixed: 'Erros no sistema de arquivos encontrados e não corrigidos (verificação somente leitura)', ScanNeeded: 'Verificação completa necessária', SpotFixNeeded: 'Correção pontual necessária', FullRepairNeeded: 'Reparo completo necessário' };
 
 // Lista padronizada dos testes automáticos (usada na aba Saúde e no laudo)
 function testesAutomaticos(s) {
@@ -260,7 +261,7 @@ function testesAutomaticos(s) {
     add('Integridade do Windows (DISM + SFC)', !dOk && /repar/i.test(P.sistema.dism) || /viola..es de integridade/i.test(P.sistema.sfc || ''),
       `DISM: ${SISTEMA_TXT[P.sistema.dism] || P.sistema.dism}; SFC: ${(P.sistema.sfc || '').replace('Violacoes', 'Violações').replace('violacoes', 'violações')}`, !(dOk && sOk));
   }
-  if (P.disco) for (const u of arr(P.disco.unidades)) add(`Verificação da unidade ${u.unidade} (chkdsk)`, !u.ok && /repair|reparo/i.test(u.resultado), VOLUME_TXT[u.resultado] || u.resultado, !u.ok);
+  if (P.disco) for (const u of arr(P.disco.unidades)) add(`Verificação da unidade ${u.unidade} (chkdsk)`, !u.ok && /repair|reparo|NotFixed|^Erro/i.test(u.resultado), (VOLUME_TXT[u.resultado] || u.resultado) + (u.arquivo ? ` – ver ${u.arquivo}` : ''), !u.ok);
   if (P.superficie) for (const d of arr(P.superficie.discos)) {
     const lido = d.gb ? Math.round(100 * (d.lidoGB || 0) / d.gb) : null;
     add(`Superfície do disco ${d.disco} (${d.modelo || ''})`, d.areasComErro > 0 || !!d.erro,
@@ -271,11 +272,19 @@ function testesAutomaticos(s) {
     const w = P.desempenho;
     add('Desempenho (WinSAT)', false, w.processador != null ? `Processador ${w.processador} · memória ${w.memoria} · disco ${w.disco} · vídeo ${w.graficos} (escala até 9,9)` : `Não concluído (código ${w.codigo})`, w.processador == null || (w.disco != null && w.disco < 6));
   }
+  if (P.benchmark) {
+    const b = P.benchmark, d = b.disco || {};
+    add('Benchmark (processador, memória e disco)', b.errosCalculo > 0,
+      `Processador: ${v0(b.cpuMono)} ciclos/s com 1 thread e ${v0(b.cpuMulti)} com ${v0(b.threads)} (${v0(b.escala)}×); memória: ${v0(b.memoriaMBs)} MB/s; ` +
+      (d.erro ? `disco ${d.unidade || ''}: ${d.erro}` : `disco ${d.unidade} escrita ${d.escritaMBs} MB/s, leitura ${d.leituraMBs} MB/s, 4K aleatório ${d.leitura4kIops} IOPS`) +
+      (b.errosCalculo > 0 ? `; ${b.errosCalculo} erro(s) de cálculo` : ''),
+      !!d.erro || (d.leituraMBs != null && d.leituraMBs < 60) || (d.escritaMBs != null && d.escritaMBs < 30));
+  }
   if (P.memoria) add('Memória RAM (padrões gravados e conferidos)', P.memoria.erros > 0, `${P.memoria.mbTestados} MB testados, ${P.memoria.passadas} passada(s) em ${P.memoria.minutos} min, ${P.memoria.erros} erro(s)`, P.memoria.passadas < 2);
   if (P.estresse) {
     const e = P.estresse;
-    add('Estresse do processador', e.errosCalculo > 0 || e.errosWhea > 0,
-      `${e.minutos} min com ${e.threads} threads; uso médio ${e.usoMedioPct}%; desempenho médio ${e.desempenhoMedioPct}% (mín. ${e.desempenhoMinPct}%)${e.tempMax != null ? `; temperatura máx. ${e.tempMax} °C` : ''}; ${e.errosCalculo} erro(s) de cálculo; ${e.eventosLimitacao} aviso(s) de limitação`,
+    add('Estresse do processador', e.errosCalculo > 0 || e.errosWhea > 0 || !!e.abortado,
+      `${e.abortado ? e.abortado.replace('Interrompido:', 'Interrompido por temperatura:') + '; ' : ''}${e.minutos} min com ${e.threads} threads; uso médio ${e.usoMedioPct}%; desempenho médio ${e.desempenhoMedioPct}% (mín. ${e.desempenhoMinPct}%)${e.tempMax != null ? `; temperatura máx. ${e.tempMax} °C` : ''}; ${e.errosCalculo} erro(s) de cálculo; ${e.eventosLimitacao} aviso(s) de limitação`,
       (e.tempMax != null && e.tempMax >= 90) || e.eventosLimitacao > 0 || (e.desempenhoMinPct != null && e.desempenhoMinPct < 60));
   }
   if (P.rede) for (const a of arr(P.rede.alvos)) add(`Rede prolongada – ${a.nome} (${a.alvo})`, a.perdaPct > 5,
@@ -283,13 +292,19 @@ function testesAutomaticos(s) {
   if (P.antivirus) add(`Antivírus – verificação ${P.antivirus.tipo === 'Completa' ? 'completa' : 'rápida'}`, arr(P.antivirus.ameacas).length > 0,
     P.antivirus.erro ? `Não executou: ${P.antivirus.erro}` : `${arr(P.antivirus.ameacas).length} ameaça(s) em ${P.antivirus.minutos} min`, !!P.antivirus.erro);
   if (P.energia) add('Relatório de energia (powercfg)', false, `${v0(P.energia.erros)} erro(s), ${v0(P.energia.avisos)} aviso(s) – ver energia.html`, P.energia.erros > 0);
+  if (s.sensores && arr(s.sensores.itens).length) {
+    const an = analisarSensores(s);
+    // os problemas entram nos achados um a um (achadosProfundos); aqui fica só o resumo
+    out.push({ nome: 'Sensores durante os testes (temperatura, tensão, ventoinhas)', resultado: an.some(a => a.nivel === 'grave') ? 'falha' : an.length ? 'alerta' : 'ok', obs: resumoSensores(s), sensores: true });
+  }
   return out;
 }
 const v0 = x => (x == null ? '—' : x);
 const RES_BADGE = { ok: '<span class="badge ok">OK</span>', alerta: '<span class="badge warn">Atenção</span>', falha: '<span class="badge bad">Falha</span>' };
 
 function achadosProfundos(s, add) {
-  for (const t of testesAutomaticos(s)) if (t.resultado !== 'ok') add(t.resultado === 'falha' ? 'grave' : 'alerta', `${t.nome}: ${t.obs}.`);
+  for (const a of analisarSensores(s)) add(a.nivel, a.texto);
+  for (const t of testesAutomaticos(s)) if (t.resultado !== 'ok' && !t.sensores) add(t.resultado === 'falha' ? 'grave' : 'alerta', `${t.nome}: ${t.obs}.`);
   for (const sa of arr(s.smartAtributos)) for (const at of arr(sa.atributos)) {
     if (SMART_CRITICOS.includes(at.id) && at.bruto > 0) add('grave', `SMART – ${at.nome}: ${at.bruto} (disco ${sa.instancia ? sa.instancia.split('\\').pop() : ''}).`);
     if (at.id === 199 && at.bruto > 0) add('alerta', `SMART – ${at.bruto} erro(s) CRC: verifique o cabo SATA e o conector.`);
@@ -317,7 +332,7 @@ function renderProfundo(s) {
   const P = p.testes || {};
   return `<div class="panel"><h2>Testes profundos <small class="muted">${esc(p.inicio || '')} · ${v0(p.minutosTotal)} min</small></h2>
     ${T.length ? simpleTable(['Teste', 'Resultado', 'Detalhes'], T.map(t => [esc(t.nome), RES_BADGE[t.resultado], esc(t.obs)])) : '<p class="muted">Nenhum resultado.</p>'}
-    ${P.estresse ? `<p class="muted">Estresse: temperatura inicial ${v(P.estresse.tempInicial, ' °C')}, frequência média ${v(P.estresse.mhzMedio, ' MHz')}, desempenho inicial ${v(P.estresse.desempenhoInicialPct, '%')}. A temperatura vem da zona térmica ACPI; muitos PCs não informam.</p>` : ''}
+    ${P.estresse ? `<p class="muted">Estresse: temperatura inicial ${v(P.estresse.tempInicial, ' °C')}, frequência média ${v(P.estresse.mhzMedio, ' MHz')}, desempenho inicial ${v(P.estresse.desempenhoInicialPct, '%')}. A temperatura vem do monitor de sensores (processador, ou zona térmica ACPI quando o LibreHardwareMonitor não está na pasta do script).</p>` : ''}
     ${P.logs ? `<p class="muted">Logs copiados: ${arr(P.logs.arquivos).map(esc).join(', ')}.</p>` : ''}
   </div>`;
 }
@@ -351,4 +366,122 @@ function renderDetalhes(s) {
   }
   if (s.drivers && arr(s.drivers.naoAssinados).length) parts.push(`<details><summary>Drivers sem assinatura (${arr(s.drivers.naoAssinados).length})</summary>${simpleTable(['Dispositivo', 'Versão', 'INF'], arr(s.drivers.naoAssinados).map(d => [v(d.dispositivo), v(d.versao), v(d.inf)]))}</details>`);
   return parts.length ? `<div class="panel"><h2>Saúde detalhada</h2>${parts.join('')}</div>` : '';
+}
+
+// ------------------------------------------------------------------ sensores (10_sensores.csv + resumo em 06_saude.json)
+const SENSOR_TIPO = { temperatura: 'Temperatura', tensao: 'Tensão', ventoinha: 'Ventoinha', potencia: 'Potência', corrente: 'Corrente', controle: 'Controle', carga: 'Carga', frequencia: 'Frequência' };
+const FASE_TXT = { ocioso: 'repouso', benchmark: 'benchmark', estresse: 'estresse', memoria: 'memória', desempenho: 'WinSAT', sistema: 'DISM/SFC', disco: 'chkdsk', superficie: 'superfície', rede: 'rede', antivirus: 'antivírus', energia: 'energia', logs: 'logs', fim: 'fim' };
+const TOL_TENSAO = 5; // % – tolerância ATX das linhas +12V, +5V e +3.3V
+
+// linha da fonte pelo nome do sensor; standby (5VSB, 3VSB) fica de fora
+function tensaoNominal(n) {
+  if (/SB|standby/i.test(n)) return null;
+  // "(?![a-z])": "Core #5 VID" não é a linha de 5 V
+  if (/(^|[^\d.#])12\s*V(?![a-z])/i.test(n)) return 12;
+  if (/3[.,]3\s*V(?![a-z])|3V3/i.test(n)) return 3.3;
+  if (/(^|[^\d.#])5\s*V(?![a-z])/i.test(n)) return 5;
+  return null;
+}
+function desvioTensao(x) {
+  const nom = /^(Cpu|Gpu)/i.test(x.hwTipo || '') ? null : tensaoNominal(x.nome || '');
+  return nom && num(x.min) != null && num(x.max) != null ? Math.max(Math.abs(x.min - nom), Math.abs(x.max - nom)) / nom * 100 : 0;
+}
+
+function analisarSensores(s) {
+  const out = [], S = s && s.sensores;
+  if (!S) return out;
+  const add = (nivel, texto) => out.push({ nivel, texto });
+  const pico = {}; // maior temperatura por processador / placa de vídeo
+  for (const x of arr(S.itens)) {
+    const max = num(x.max), min = num(x.min);
+    // limites de alarme do NVMe não são leituras (coletas antigas ainda trazem)
+    if (max == null || /warning|critical/i.test(x.nome || '')) continue;
+    if (x.tipo === 'tensao' && desvioTensao(x) > TOL_TENSAO)
+      add('alerta', `Tensão ${x.nome} (${x.hw}) fora de ±${TOL_TENSAO}%: ${min} a ${max} V para ${tensaoNominal(x.nome)} V nominais. A leitura é do sensor da placa-mãe; confirme com multímetro antes de condenar a fonte.`);
+    if (x.tipo === 'temperatura' && /^(Cpu|Gpu)/i.test(x.hwTipo || '') && (!pico[x.hw] || max > pico[x.hw].max)) pico[x.hw] = x;
+    if (x.tipo === 'temperatura' && /^Storage/i.test(x.hwTipo || '') && max >= 70) add('alerta', `${x.hw}: temperatura chegou a ${max} °C durante os testes.`);
+    // placas de vídeo param a ventoinha em repouso: só vale para quem estava girando no início
+    if (x.tipo === 'ventoinha' && num(x.inicial) > 0 && min === 0 && !/^Gpu/i.test(x.hwTipo || ''))
+      add('alerta', `Ventoinha ${x.nome} (${x.hw}) parou durante o monitoramento (girava a ${x.inicial} RPM).`);
+  }
+  for (const [hw, x] of Object.entries(pico)) {
+    const quando = x.faseMax && x.faseMax !== 'ocioso' ? ` durante ${FASE_TXT[x.faseMax] || x.faseMax}` : '';
+    if (x.max >= 95) add('grave', `${hw}: temperatura chegou a ${x.max} °C${quando} (em repouso: ${x.inicial} °C). Verifique cooler, pasta térmica e fluxo de ar.`);
+    else if (x.max >= 85) add('alerta', `${hw}: temperatura chegou a ${x.max} °C${quando} (em repouso: ${x.inicial} °C).`);
+  }
+  return out;
+}
+
+function resumoSensores(s) {
+  const it = arr(s.sensores && s.sensores.itens), p = [], quente = {};
+  for (const x of it) if (x.tipo === 'temperatura' && num(x.max) != null && !(quente[x.hw] >= x.max)) quente[x.hw] = x.max;
+  for (const [hw, m] of Object.entries(quente)) p.push(`${hw} máx. ${m} °C`);
+  for (const x of it) if (x.tipo === 'tensao' && tensaoNominal(x.nome || '')) p.push(`${x.nome} ${x.min} a ${x.max} V`);
+  const f = it.filter(x => x.tipo === 'ventoinha' && x.max > 0);
+  if (f.length) p.push(`${f.length} ventoinha(s): ${f.map(x => `${Math.round(x.min)} a ${Math.round(x.max)} RPM`).join(', ')}`);
+  return p.join('; ') || 'Nenhum sensor de temperatura, tensão ou ventoinha disponível neste PC';
+}
+
+function renderSensores(s) {
+  const S = s.sensores;
+  if (!S || !arr(S.itens).length) return '';
+  const ordem = Object.keys(SENSOR_TIPO);
+  const itens = arr(S.itens).slice().sort((a, b) => ordem.indexOf(a.tipo) - ordem.indexOf(b.tipo) || String(a.hw).localeCompare(String(b.hw)));
+  const un = x => (x.unidade === 'C' ? ' °C' : x.unidade ? ' ' + x.unidade : '');
+  const semPlaca = !/LibreHardwareMonitor/i.test(S.fonte || '') && !itens.some(x => x.tipo === 'tensao' || x.tipo === 'ventoinha');
+  const varios = S.amostras > 1;
+  return `<div class="panel"><h2>Sensores <small class="muted">${esc(S.fonte || '')} · ${v0(S.amostras)} amostra(s)${varios ? ` a cada ${v0(S.intervaloSeg)} s` : ''}</small></h2>
+    ${S.aviso ? `<div class="note">${esc(S.aviso)}</div>` : ''}
+    ${graficoSensores()}
+    ${simpleTable(varios ? ['Componente', 'Sensor', 'Tipo', 'Inicial', 'Mínimo', 'Média', 'Máximo', 'Pico em'] : ['Componente', 'Sensor', 'Tipo', 'Valor'], itens.map(x => {
+      const ruim = x.tipo === 'tensao' && desvioTensao(x) > TOL_TENSAO;
+      const c = val => (ruim ? `<b class="bad-txt">${v(val, un(x))}</b>` : v(val, un(x)));
+      const base = [v(x.hw), v(x.nome) + (x.tipo === 'tensao' && tensaoNominal(x.nome || '') ? ` <small class="muted">nominal ${tensaoNominal(x.nome)} V</small>` : ''), SENSOR_TIPO[x.tipo] || v(x.tipo)];
+      return varios ? [...base, v(x.inicial, un(x)), c(x.min), v(x.media, un(x)), c(x.max), esc(FASE_TXT[x.faseMax] || x.faseMax || '—')] : [...base, c(x.inicial)];
+    }))}
+    ${semPlaca ? '<p class="muted">Tensões da fonte (+12V, +5V, +3.3V) e rotação das ventoinhas não foram lidas: o Windows não informa esses sensores. Coloque o LibreHardwareMonitor na pasta <span class="mono">sensores</span> ao lado do script (<span class="mono">baixar-sensores.ps1</span>) e rode de novo.</p>' : ''}
+    <p class="muted">Série completa em <span class="mono">10_sensores.csv</span> (uma linha por sensor a cada amostra, com o teste em execução).</p>
+  </div>`;
+}
+
+// Temperaturas ao longo dos testes (SVG), a partir do 10_sensores.csv da coleta aberta
+function graficoSensores() {
+  const bytes = typeof findFile === 'function' ? findFile('10_sensores.csv') : null;
+  if (!bytes) return '';
+  const horas = [], fases = [], series = new Map();
+  for (const l of decodeText(bytes).split(/\r?\n/).slice(1)) {
+    const c = l.split(';');
+    if (c.length < 7) continue;
+    if (horas[horas.length - 1] !== c[0]) { horas.push(c[0]); fases.push(c[1]); }
+    if (c[4] !== 'temperatura' || isNaN(+c[6]) || /warning|critical/i.test(c[5])) continue;
+    const k = `${c[2]} · ${c[5]}`;
+    if (!series.has(k)) series.set(k, []);
+    series.get(k).push([horas.length - 1, +c[6]]);
+  }
+  const top = [...series].map(([k, pts]) => ({ k, pts, max: Math.max(...pts.map(p => p[1])) })).sort((a, b) => b.max - a.max).slice(0, 6);
+  if (horas.length < 3 || !top.length) return '';
+  const W = 800, H = 230, L = 38, R = 8, T = 18, B = 22, n = horas.length - 1;
+  const todos = top.flatMap(t => t.pts.map(p => p[1]));
+  const y0 = Math.floor(Math.min(...todos) / 10) * 10, y1 = Math.max(y0 + 10, Math.ceil(Math.max(...todos) / 10) * 10);
+  const X = i => L + (W - L - R) * i / n, Y = t => T + (H - T - B) * (1 - (t - y0) / (y1 - y0));
+  const cores = ['#d62728', '#1f77b4', '#2ca02c', '#ff7f0e', '#9467bd', '#8c564b'];
+  let faixas = '';
+  for (let i = 0, ini = 0, par = 0; i <= n; i++) {
+    if (i === n || fases[i + 1] !== fases[ini]) {
+      const x = X(ini), w = Math.max(1, X(Math.min(n, i + 1)) - x);
+      faixas += `${par++ % 2 ? `<rect x="${x.toFixed(1)}" y="${T}" width="${w.toFixed(1)}" height="${H - T - B}" fill="currentColor" opacity=".06"/>` : ''}
+        ${w > 40 ? `<text x="${(x + 3).toFixed(1)}" y="${T - 5}" font-size="10" fill="currentColor" opacity=".7">${esc(FASE_TXT[fases[ini]] || fases[ini])}</text>` : ''}`;
+      ini = i + 1;
+    }
+  }
+  let grade = '';
+  for (let t = y0; t <= y1; t += (y1 - y0) > 50 ? 20 : 10)
+    grade += `<line x1="${L}" x2="${W - R}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}" stroke="currentColor" opacity=".15"/><text x="${L - 5}" y="${(Y(t) + 3).toFixed(1)}" font-size="10" text-anchor="end" fill="currentColor">${t}°</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Temperaturas durante os testes" style="width:100%;max-width:900px;height:auto">
+      ${faixas}${grade}
+      ${top.map((t, i) => `<polyline fill="none" stroke="${cores[i]}" stroke-width="1.6" points="${t.pts.map(p => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' ')}"/>`).join('')}
+      <text x="${L}" y="${H - 6}" font-size="10" fill="currentColor">${esc(horas[0].slice(11))}</text>
+      <text x="${W - R}" y="${H - 6}" font-size="10" text-anchor="end" fill="currentColor">${esc(horas[n].slice(11))}</text>
+    </svg>
+    <p class="muted" style="margin:2px 0 10px">${top.map((t, i) => `<span style="color:${cores[i]}">■</span> ${esc(t.k)} (máx. ${t.max} °C)`).join(' &nbsp; ')}</p>`;
 }

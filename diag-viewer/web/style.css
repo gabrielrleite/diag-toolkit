@@ -215,7 +215,8 @@ a.btn { text-decoration: none; }
 .rep-form label.btn.ghost { color: var(--accent); }
 
 /* ---------- módulos */
-.mods { display: flex; gap: 4px; flex-wrap: wrap; }
+/* margin-right:auto: o menu fica sempre ao lado do titulo, com ou sem os botoes da direita */
+.mods { display: flex; gap: 4px; flex-wrap: wrap; margin-right: auto; }
 .mods a { padding: 6px 12px; border-radius: 7px; color: var(--muted); text-decoration: none; font-weight: 600; }
 .mods a.on { background: var(--accent-soft); color: var(--accent); }
 .ld-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; position: sticky; top: 52px; z-index: 4; }

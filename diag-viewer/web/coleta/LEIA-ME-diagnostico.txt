@@ -8,6 +8,14 @@ DIAGNOSTICO DO COMPUTADOR (manutencao)
    disco, WinSAT, memoria RAM, estresse do processador com
    temperatura, rede prolongada, antivirus, relatorio de energia.
    [M] no menu de testes agenda o teste de memoria do Windows.
+   Perfis prontos no menu de testes: [A] basico (12 min), [R] recomendado,
+   [C] completo, [T] burn-in. [B] benchmark de processador, memoria e disco.
+   [2] Verificar unidades tem dois modos: so analisar (nada e alterado) ou
+   analisar e corrigir sozinho os erros encontrados (chkdsk /scan).
+   Durante os testes, temperaturas, potencia e carga sao gravadas a cada 5 s
+   (10_sensores.csv). Para ler tambem as TENSOES DA FONTE e as VENTOINHAS,
+   rode uma vez o baixar-sensores.ps1 (precisa de internet): ele baixa o
+   LibreHardwareMonitor para a pasta "sensores". Leve a pasta junto.
 4. Com o diag-servidor.cfg presente, o resultado vai para o servidor e
    aparece na tela inicial do site, pronto para vincular a um laudo.
 
@@ -15,6 +23,7 @@ Coleta: hardware, discos (saude, temperatura, desgaste), memoria, video,
 telas azuis, erros de hardware/disco, dispositivos com problema, servicos,
 impressoras, rede (gateway, DNS, dominio, internet), ativacao, antivirus,
 atualizacoes, programas instalados e erros do log do Windows.
-Nada e alterado no computador.
+Nada e alterado no computador (o benchmark grava um arquivo temporario
+de ate 1 GB e apaga em seguida).
 
 Guarde o diag-servidor.cfg com cuidado: ele contem o token de envio.

@@ -20,9 +20,13 @@
 
   Testes profundos (opcionais, -Testes separados por virgula):
     sistema       DISM /ScanHealth + SFC /VERIFYONLY (10 a 40 min)
-    disco         chkdsk online (Repair-Volume -Scan) em cada unidade NTFS
+    disco         chkdsk somente leitura em cada unidade NTFS: so analisa e relata
+    disco-corrigir  analisa e, onde houver erro, corrige sozinho (chkdsk /scan,
+                  correcao online). ALTERA o sistema de arquivos da unidade.
     superficie    leitura completa do disco do sistema (-SuperficieTodos = todos)
     desempenho    WinSAT formal (notas de CPU, memoria, disco, video)
+    benchmark     pontuacao propria: CPU (1 thread e todas), copia de memoria,
+                  disco (escrita/leitura sequencial e leitura aleatoria 4K)
     memoria       grava e confere padroes na RAM livre por -Minutos
     estresse      CPU a 100% por -Minutos com conferencia de calculo,
                   frequencia, temperatura e limitacao termica
@@ -31,9 +35,25 @@
     energia       powercfg /energy (60 s)
     logs          copia dos logs do Windows (.evtx)
     -Minutos <n>  duracao de memoria/estresse/rede (padrao 10)
+    -TempLimite <C>  interrompe o estresse se o processador passar disso (padrao 100)
   Exemplo: .\diagnostico.ps1 -Enviar -Testes sistema,disco,estresse,memoria -Minutos 15
 
-  Nao altera nada no sistema: so le e exporta.
+  Perfis prontos (-Perfil), do mais basico ao mais completo:
+    rapido    so o diagnostico (1 a 3 min)
+    basico    benchmark, estresse, memoria e chkdsk, 3 min cada (~12 min)
+    padrao    integridade, chkdsk, benchmark, WinSAT, memoria, estresse, rede,
+              antivirus rapido e energia, 10 min cada (~1 h 15)
+    completo  padrao + superficie do disco do sistema + logs, 20 min cada
+    burnin    completo com todos os discos, antivirus completo e 60 min cada
+  -Testes e -Minutos, se informados, valem mais que o perfil.
+
+  Sensores: durante os testes, temperaturas, tensoes da fonte, ventoinhas e
+  potencia sao gravados a cada 5 s em 10_sensores.csv. Tensoes e ventoinhas
+  dependem do LibreHardwareMonitorLib.dll na pasta "sensores" ao lado do
+  script (veja baixar-sensores.ps1). Sem ele, so o que o Windows informa:
+  zona termica ACPI, temperatura dos discos, GPU NVIDIA (nvidia-smi), bateria.
+
+  So le o sistema. O benchmark grava um arquivo temporario (ate 1 GB) e apaga.
 #>
 param(
   [ValidateRange(0, 36500)][int]$Dias = 30,
@@ -46,6 +66,8 @@ param(
   [switch]$SemRede,
   [string[]]$Testes,
   [ValidateRange(1, 600)][int]$Minutos = 10,
+  [ValidateSet('rapido', 'basico', 'padrao', 'completo', 'burnin')][string]$Perfil,
+  [ValidateRange(60, 130)][int]$TempLimite = 100,
   [switch]$SuperficieTodos,
   [switch]$EscolherPasta,
   [switch]$ListarRemoviveis
@@ -53,6 +75,19 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
+
+# ---------------------------------------------------------------- perfis de teste
+$perfis = @{
+  basico   = @('benchmark,estresse,memoria,disco', 3)
+  padrao   = @('sistema,disco,benchmark,desempenho,memoria,estresse,rede,antivirus,energia', 10)
+  completo = @('sistema,disco,benchmark,desempenho,memoria,estresse,rede,antivirus,energia,superficie,logs', 20)
+  burnin   = @('sistema,disco,benchmark,desempenho,memoria,estresse,rede,antivirus-completo,energia,superficie,logs', 60)
+}
+if ($Perfil -and $perfis[$Perfil]) {
+  if (-not $Testes) { $Testes = $perfis[$Perfil][0] }
+  if (-not $PSBoundParameters.ContainsKey('Minutos')) { $Minutos = $perfis[$Perfil][1] }
+  if ($Perfil -eq 'burnin') { $SuperficieTodos = $true }
+}
 
 # ---------------------------------------------------------------- ajudantes do menu
 if ($EscolherPasta) {
@@ -225,6 +260,149 @@ Add-Content $maqTxt "`r`n--- Sincronizacao de horario (w32tm) ---"
 (w32tm /query /status 2>&1) | Out-String | Add-Content $maqTxt
 
 $saude = [ordered]@{ versao = 2; tipo = 'diagnostico'; geradoEm = Fmt-Data (Get-Date); periodoDias = $Dias }
+if ($Perfil) { $saude.perfil = $Perfil }
+
+# ================================================================ 1b. sensores
+# Amostra temperaturas, tensoes, ventoinhas e potencia. Roda uma vez no
+# diagnostico rapido e em segundo plano (a cada $intervaloSensor s) durante os
+# testes profundos, marcando em cada linha qual teste estava rodando.
+$intervaloSensor = 5
+$sensorCsv = Join-Path $pasta '10_sensores.csv'
+$sensorDll = @((Join-Path $PSScriptRoot 'sensores\LibreHardwareMonitorLib.dll'), (Join-Path $PSScriptRoot 'LibreHardwareMonitorLib.dll')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+# arquivos extraidos de um .zip baixado vem "bloqueados" e o .NET se recusa a carregar
+if ($sensorDll) { Get-ChildItem (Split-Path $sensorDll) -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue }
+$mon = [hashtable]::Synchronized(@{ parar = $false; fase = 'ocioso'; fonte = ''; erro = $null; amostras = 0; cpuTemp = $null })
+$sensorLoop = {
+  param($sync, $csv, $dll, $intervalo, $uma)
+  $inv = [Globalization.CultureInfo]::InvariantCulture
+  $lhm = $null
+  if ($dll) {
+    try {
+      Add-Type -Path $dll -ErrorAction Stop
+      $lhm = New-Object LibreHardwareMonitor.Hardware.Computer
+      # nem toda versao tem todas as propriedades
+      foreach ($p in 'IsCpuEnabled', 'IsGpuEnabled', 'IsMotherboardEnabled', 'IsMemoryEnabled', 'IsStorageEnabled', 'IsControllerEnabled', 'IsPsuEnabled', 'IsBatteryEnabled') { try { $lhm.$p = $true } catch { } }
+      $lhm.Open()
+      $sync.fonte = 'LibreHardwareMonitor ' + (([Diagnostics.FileVersionInfo]::GetVersionInfo($dll).ProductVersion) -split '\+')[0]
+    } catch { $sync.erro = "LibreHardwareMonitor nao carregou: $($_.Exception.Message)"; $lhm = $null }
+  }
+  if (-not $lhm) { $sync.fonte = 'Windows (ACPI, discos, nvidia-smi, bateria)' }
+  $tipos = @{ Temperature = 'temperatura'; Voltage = 'tensao'; Fan = 'ventoinha'; Power = 'potencia'; Current = 'corrente'; Control = 'controle'; Load = 'carga' }
+  $nvsmi = (Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue).Source
+  $num = { param($x) $d = 0.0; if ([double]::TryParse("$x".Trim(), [Globalization.NumberStyles]::Float, $inv, [ref]$d)) { $d } }
+  $discoTemps = @()
+  $w = New-Object IO.StreamWriter($csv, $false, (New-Object Text.UTF8Encoding($true)))
+  $w.WriteLine('hora;fase;hw;hwTipo;tipo;nome;valor')
+  $n = 0
+  try {
+    do {
+      $lista = New-Object System.Collections.Generic.List[object]
+      $add = { param($hw, $hwTipo, $tipo, $nome, $valor) if ($null -ne $valor) { $lista.Add(@("$hw", "$hwTipo", $tipo, "$nome", [double]$valor)) } }
+      if ($lhm) {
+        $pilha = New-Object System.Collections.Stack
+        foreach ($h in $lhm.Hardware) { $pilha.Push($h) }
+        while ($pilha.Count) {
+          $h = $pilha.Pop()
+          try { $h.Update() } catch { }
+          foreach ($sh in $h.SubHardware) { $pilha.Push($sh) }
+          foreach ($s in $h.Sensors) {
+            $t = $tipos["$($s.SensorType)"]
+            if (-not $t -or $null -eq $s.Value) { continue }
+            if ($t -eq 'carga' -and $s.Name -notmatch 'Total|GPU Core') { continue }
+            # sem acesso ao driver (nao administrador / sem PawnIO) o processador devolve 0
+            if ($t -eq 'temperatura' -and ($s.Value -le 0 -or $s.Value -gt 150)) { continue }
+            # limites de alarme do NVMe (Warning/Critical Temperature) nao sao leituras
+            if ($t -eq 'temperatura' -and $s.Name -match 'Warning|Critical') { continue }
+            if ($t -in 'potencia', 'tensao' -and $s.Value -le 0) { continue }
+            & $add $h.Name $h.HardwareType $t $s.Name $s.Value
+          }
+        }
+      }
+      # zona termica ACPI: sempre, e a unica temperatura quando o LibreHardwareMonitor nao le o processador
+      $i = 0
+      foreach ($z in @(Get-CimInstance -Namespace root\wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue)) {
+        $i++; $c = [math]::Round($z.CurrentTemperature / 10 - 273.15, 1)
+        # abaixo de 20 C e valor falso da BIOS (comum em desktops AMD: 16.9 C fixos)
+        if ($c -ge 20 -and $c -lt 130) { & $add 'Placa-mae (ACPI)' 'Acpi' 'temperatura' "Zona termica $i" $c }
+      }
+      if (-not $lhm) {
+        if ($nvsmi) {
+          foreach ($l in @(& $nvsmi --query-gpu=name,temperature.gpu,fan.speed,power.draw,utilization.gpu --format=csv,noheader,nounits 2>$null)) {
+            $c = @("$l" -split '\s*,\s*'); if ($c.Count -lt 5) { continue }
+            & $add $c[0] 'GpuNvidia' 'temperatura' 'GPU Core' (& $num $c[1])
+            & $add $c[0] 'GpuNvidia' 'controle' 'Ventoinha' (& $num $c[2])
+            & $add $c[0] 'GpuNvidia' 'potencia' 'GPU Power' (& $num $c[3])
+            & $add $c[0] 'GpuNvidia' 'carga' 'GPU Core' (& $num $c[4])
+          }
+        }
+        # a consulta aos discos e lenta: so a cada 6 amostras
+        if ($n % 6 -eq 0) {
+          $discoTemps = @(Get-PhysicalDisk -ErrorAction SilentlyContinue | ForEach-Object {
+            $rc = $null; try { $rc = $_ | Get-StorageReliabilityCounter -ErrorAction Stop } catch { }
+            if ($rc -and $rc.Temperature) { , @($_.FriendlyName, [double]$rc.Temperature) }
+          })
+        }
+        foreach ($d in $discoTemps) { & $add $d[0] 'Storage' 'temperatura' 'Temperatura' $d[1] }
+        foreach ($b in @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStatus -ErrorAction SilentlyContinue)) {
+          if ($b.Voltage) { & $add 'Bateria' 'Battery' 'tensao' 'Tensao' ($b.Voltage / 1000) }
+        }
+      }
+      $pi = Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation -Filter "Name='_Total'" -ErrorAction SilentlyContinue
+      if ($pi) {
+        & $add 'Processador (Windows)' 'Windows' 'carga' 'Uso' $pi.PercentProcessorTime
+        & $add 'Processador (Windows)' 'Windows' 'carga' 'Desempenho' $pi.PercentProcessorPerformance
+        & $add 'Processador (Windows)' 'Windows' 'frequencia' 'Frequencia' $pi.ProcessorFrequency
+      }
+      $ct = @($lista | Where-Object { $_[2] -eq 'temperatura' -and $_[1] -eq 'Cpu' } | ForEach-Object { $_[4] })
+      if (-not $ct) { $ct = @($lista | Where-Object { $_[2] -eq 'temperatura' -and $_[1] -eq 'Acpi' } | ForEach-Object { $_[4] }) }
+      $sync.cpuTemp = if ($ct) { ($ct | Measure-Object -Maximum).Maximum } else { $null }
+      $hora = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); $fase = $sync.fase
+      foreach ($x in $lista) {
+        $w.WriteLine(($hora, $fase, ($x[0] -replace ';', ','), $x[1], $x[2], ($x[3] -replace ';', ','), $x[4].ToString('0.###', $inv)) -join ';')
+      }
+      $w.Flush(); $n++; $sync.amostras = $n
+      if ($uma) { break }
+      $ate = (Get-Date).AddSeconds($intervalo)
+      while (-not $sync.parar -and (Get-Date) -lt $ate) { Start-Sleep -Milliseconds 250 }
+    } while (-not $sync.parar)
+  } finally {
+    $w.Dispose()
+    if ($lhm) { try { $lhm.Close() } catch { } }
+  }
+}
+function Resumo-Sensores {
+  if (-not (Test-Path -LiteralPath $sensorCsv)) { return $null }
+  $inv = [Globalization.CultureInfo]::InvariantCulture
+  $uni = @{ temperatura = 'C'; tensao = 'V'; ventoinha = 'RPM'; potencia = 'W'; corrente = 'A'; controle = '%'; carga = '%'; frequencia = 'MHz' }
+  $linhas = @(Import-Csv -LiteralPath $sensorCsv -Delimiter ';')
+  $semPlaca = -not @($linhas | Where-Object { $_.hwTipo -notmatch '^(Cpu|Gpu|Windows|Acpi|Storage|Battery)' -and $_.tipo -in 'tensao', 'ventoinha' })
+  $semCpu = -not @($linhas | Where-Object { $_.hwTipo -eq 'Cpu' -and $_.tipo -eq 'temperatura' })
+  if ($sensorDll -and -not $mon.erro -and ($semPlaca -or $semCpu)) {
+    $falta = (@($(if ($semCpu) { 'a temperatura do processador' }), $(if ($semPlaca) { 'as tensoes da fonte e as ventoinhas' })) | Where-Object { $_ }) -join ', '
+    $pawn = [bool](Get-Service '*PawnIO*' -ErrorAction SilentlyContinue) -or (Test-Path "$env:ProgramFiles\PawnIO")
+    $mon.erro = if ($pawn) { "O LibreHardwareMonitor nao leu $falta. O driver PawnIO esta instalado; o chip de sensores desta placa pode nao ser suportado." }
+                else { "O LibreHardwareMonitor nao leu ${falta}: o driver PawnIO nao esta instalado neste PC. Instale em https://pawnio.eu e rode o diagnostico de novo." }
+  }
+  # zona ACPI que nao varia em 1 min ou mais de amostras e valor fixo da BIOS, nao temperatura
+  $fixas = @($linhas | Where-Object { $_.hwTipo -eq 'Acpi' } | Group-Object nome | Where-Object { $_.Count -ge 12 -and @($_.Group.valor | Select-Object -Unique).Count -eq 1 } | ForEach-Object { $_.Name })
+  if ($fixas) { $linhas = @($linhas | Where-Object { -not ($_.hwTipo -eq 'Acpi' -and $_.nome -in $fixas) }) }
+  [ordered]@{
+    fonte = $mon.fonte; aviso = $mon.erro; intervaloSeg = $intervaloSensor; amostras = $mon.amostras; arquivo = '10_sensores.csv'
+    itens = @($linhas | Group-Object hw, tipo, nome | ForEach-Object {
+      $g = @($_.Group); $v = @($g | ForEach-Object { [double]::Parse($_.valor, $inv) })
+      $m = $v | Measure-Object -Minimum -Maximum -Average
+      $pico = 0; for ($i = 1; $i -lt $v.Count; $i++) { if ($v[$i] -gt $v[$pico]) { $pico = $i } }
+      [ordered]@{ hw = $g[0].hw; hwTipo = $g[0].hwTipo; tipo = $g[0].tipo; nome = $g[0].nome; unidade = $uni[$g[0].tipo]
+        inicial = $v[0]; min = $m.Minimum; media = [math]::Round($m.Average, 2); max = $m.Maximum; faseMax = $g[$pico].fase }
+    })
+  }
+}
+# tensao nominal de uma linha da fonte pelo nome do sensor (+12V, +5V, +3.3V); standby fica de fora
+function Tensao-Nominal([string]$n) {
+  if ($n -match 'SB|standby') { return $null }
+  # "(?![a-z])": "Core #5 VID" nao e a linha de 5 V
+  if ($n -match '(^|[^\d.#])12\s*V(?![a-z])') { 12 } elseif ($n -match '3[.,]3\s*V(?![a-z])|3V3') { 3.3 } elseif ($n -match '(^|[^\d.#])5\s*V(?![a-z])') { 5 }
+}
 
 # ================================================================ 2. hardware
 Log 'Processador, memoria e video'
@@ -269,7 +447,7 @@ try {
 
 try {
   $tz = @(Get-CimInstance -Namespace root\wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop |
-    ForEach-Object { [math]::Round($_.CurrentTemperature / 10 - 273.15, 1) } | Where-Object { $_ -gt 5 -and $_ -lt 130 })
+    ForEach-Object { [math]::Round($_.CurrentTemperature / 10 - 273.15, 1) } | Where-Object { $_ -ge 20 -and $_ -lt 130 })
   if ($tz) { $saude.temperaturaCpu = ($tz | Measure-Object -Maximum).Maximum }
 } catch { }
 
@@ -553,7 +731,8 @@ Log "Eventos criticos ($periodoTxt)"
 $ev = [ordered]@{}
 $ev.telaAzul = Resumo-Eventos (Busca-Eventos 'System' @('Microsoft-Windows-WER-SystemErrorReporting', 'BugCheck') @(1001))
 $ev.desligamentoInesperado = Resumo-Eventos (@(Busca-Eventos 'System' @('Microsoft-Windows-Kernel-Power') @(41)) + @(Busca-Eventos 'System' @('EventLog') @(6008)) | Sort-Object TimeCreated -Descending)
-$ev.erroDisco = Resumo-Eventos (Busca-Eventos 'System' @('disk', 'Ntfs', 'Microsoft-Windows-Ntfs', 'storahci', 'stornvme', 'iaStorA', 'iaStorAC', 'iaStorAVC') @(7, 11, 51, 55, 98, 129, 153, 157))
+# Ntfs 98 tambem sai como informativo ("volume is healthy"): so aviso, erro e critico contam
+$ev.erroDisco = Resumo-Eventos (Busca-Eventos 'System' @('disk', 'Ntfs', 'Microsoft-Windows-Ntfs', 'storahci', 'stornvme', 'iaStorA', 'iaStorAC', 'iaStorAVC') @(7, 11, 51, 55, 98, 129, 153, 157) | Where-Object { $_.Level -in 1, 2, 3 })
 $ev.erroHardware = Resumo-Eventos (Busca-Eventos 'System' @('Microsoft-Windows-WHEA-Logger') $null)
 $ev.driverVideo = Resumo-Eventos (Busca-Eventos 'System' @('Display') @(4101))
 $ev.falhaAtualizacao = Resumo-Eventos (Busca-Eventos 'System' @('Microsoft-Windows-WindowsUpdateClient') @(20))
@@ -587,7 +766,7 @@ if ($Testes) {
   $prof = [ordered]@{ inicio = Fmt-Data (Get-Date); minutos = $Minutos; solicitados = $Testes; testes = [ordered]@{} }
   $saude.profundo = $prof
   Log "Testes profundos: $($Testes -join ', ')"
-  function Etapa([string]$nome) { Write-Host ''; Log "== $nome ==" }
+  function Etapa([string]$nome, [string]$fase) { Write-Host ''; Log "== $nome =="; if ($fase) { $mon.fase = $fase } }
   function Duracao($t0) { [math]::Round(((Get-Date) - $t0).TotalMinutes, 1) }
   $csFonte = @'
 using System;
@@ -719,6 +898,67 @@ public static class DiagNativo {
     if (threads != null) foreach (Thread t in threads) t.Join(5000);
   }
 
+  // ---------------- benchmark
+  [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr VirtualAlloc(IntPtr addr, UIntPtr size, uint type, uint protect);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool VirtualFree(IntPtr addr, UIntPtr size, uint type);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool ReadFile(SafeFileHandle h, IntPtr buf, uint n, out uint lidos, IntPtr ov);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool WriteFile(SafeFileHandle h, IntPtr buf, uint n, out uint escritos, IntPtr ov);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetFilePointerEx(SafeFileHandle h, long dist, out long novo, uint metodo);
+
+  // ciclos de calculo por segundo com n threads (mesma carga do estresse, com conferencia)
+  public static double BenchCpu(int n, int segundos) {
+    IniciarEstresse(n);
+    Stopwatch sw = Stopwatch.StartNew();
+    Thread.Sleep(segundos * 1000);
+    long c = Ciclos; double s = sw.Elapsed.TotalSeconds;
+    PararEstresse();
+    return c / s;
+  }
+
+  // MB/s copiando um bloco de mb MB de um lugar para outro da RAM
+  public static double BenchMemoria(int mb, int segundos) {
+    byte[] a = new byte[mb * 1048576], b = new byte[mb * 1048576];
+    for (int i = 0; i < a.Length; i += 4096) a[i] = (byte)i;
+    Buffer.BlockCopy(a, 0, b, 0, a.Length);
+    long copiados = 0;
+    Stopwatch sw = Stopwatch.StartNew();
+    while (sw.Elapsed.TotalSeconds < segundos) { Buffer.BlockCopy(a, 0, b, 0, a.Length); copiados += a.Length; }
+    return copiados / 1048576.0 / sw.Elapsed.TotalSeconds;
+  }
+
+  // Arquivo temporario sem cache do Windows (NO_BUFFERING + WRITE_THROUGH), apagado ao fechar.
+  // Retorna {escrita MB/s, leitura MB/s, leituras aleatorias de 4K por segundo}
+  public static double[] BenchDisco(string arquivo, int mb, int segundos4k) {
+    const int BL = 1048576;
+    IntPtr buf = VirtualAlloc(IntPtr.Zero, new UIntPtr((uint)BL), 0x3000, 4);
+    if (buf == IntPtr.Zero) throw new IOException("Sem memoria para o teste de disco");
+    SafeFileHandle h = null;
+    try {
+      byte[] rnd = new byte[BL]; new Random(12345).NextBytes(rnd); Marshal.Copy(rnd, 0, buf, BL);
+      h = CreateFile(arquivo, 0xC0010000, 0, IntPtr.Zero, 2, 0x20000000u | 0x80000000u | 0x04000000u, IntPtr.Zero);
+      if (h.IsInvalid) throw new IOException("Nao foi possivel criar " + arquivo + " (erro " + Marshal.GetLastWin32Error() + ")");
+      uint k; long novo;
+      Stopwatch sw = Stopwatch.StartNew();
+      for (int i = 0; i < mb; i++) if (!WriteFile(h, buf, (uint)BL, out k, IntPtr.Zero) || k != BL) throw new IOException("Erro de escrita " + Marshal.GetLastWin32Error());
+      double escrita = mb / sw.Elapsed.TotalSeconds;
+      SetFilePointerEx(h, 0, out novo, 0);
+      sw.Reset(); sw.Start();
+      for (int i = 0; i < mb; i++) if (!ReadFile(h, buf, (uint)BL, out k, IntPtr.Zero) || k != BL) throw new IOException("Erro de leitura " + Marshal.GetLastWin32Error());
+      double leitura = mb / sw.Elapsed.TotalSeconds;
+      Random r = new Random(7); long ops = 0;
+      sw.Reset(); sw.Start();
+      while (sw.Elapsed.TotalSeconds < segundos4k) {
+        SetFilePointerEx(h, (long)r.Next(0, mb * 256) * 4096, out novo, 0);
+        if (!ReadFile(h, buf, 4096, out k, IntPtr.Zero)) throw new IOException("Erro de leitura " + Marshal.GetLastWin32Error());
+        ops++;
+      }
+      return new double[] { escrita, leitura, ops / sw.Elapsed.TotalSeconds };
+    } finally {
+      if (h != null) h.Dispose();
+      VirtualFree(buf, UIntPtr.Zero, 0x8000);
+    }
+  }
+
   // ---------------- memoria: grava padroes e confere; retorna {passadas, erros, MB testados}
   public static long[] TestarMemoria(long mb, int segundos) {
     const int MBBLOCO = 64;
@@ -755,9 +995,17 @@ public static class DiagNativo {
   # impede o PC de suspender/desligar a tela enquanto os testes rodam
   if ('DiagNativo' -as [type]) { [DiagNativo]::ManterAcordado($true) }
 
+  # ---- monitor de sensores em segundo plano; espera a 1a amostra (referencia em repouso)
+  $psMon = [powershell]::Create()
+  [void]$psMon.AddScript($sensorLoop.ToString()).AddArgument($mon).AddArgument($sensorCsv).AddArgument($sensorDll).AddArgument($intervaloSensor).AddArgument($false)
+  $hMon = $psMon.BeginInvoke()
+  $esp = Get-Date
+  while ($mon.amostras -lt 1 -and -not $hMon.IsCompleted -and ((Get-Date) - $esp).TotalSeconds -lt 60) { Start-Sleep -Milliseconds 300 }
+  Log "Sensores: $($mon.fonte)$(if ($mon.erro) { " - $($mon.erro)" })"
+
   # ---- logs completos
   if ($Testes -contains 'logs') {
-    Etapa 'Copia dos logs do Windows (.evtx)'
+    Etapa 'Copia dos logs do Windows (.evtx)' 'logs'
     $ev2 = Join-Path $pasta 'evtx'; New-Item -ItemType Directory $ev2 -Force | Out-Null
     foreach ($l in 'System', 'Application', 'Setup', 'Microsoft-Windows-Diagnostics-Performance/Operational') {
       wevtutil epl $l (Join-Path $ev2 (($l -replace '[\\/]', '_') + '.evtx')) 2>&1 | Out-Null
@@ -767,7 +1015,7 @@ public static class DiagNativo {
 
   # ---- relatorio de energia
   if ($Testes -contains 'energia') {
-    Etapa 'Relatorio de energia (powercfg /energy, 60 s)'
+    Etapa 'Relatorio de energia (powercfg /energy, 60 s)' 'energia'
     $t0 = Get-Date
     $out = (powercfg /energy /duration 60 /output (Join-Path $pasta 'energia.html') 2>&1) -join ' '
     $er = if ($out -match '(\d+)\s+(Erros|Errors)') { [int]$Matches[1] } else { $null }
@@ -775,21 +1023,39 @@ public static class DiagNativo {
     $prof.testes.energia = [ordered]@{ erros = $er; avisos = $av; minutos = Duracao $t0; arquivo = 'energia.html' }
   }
 
-  # ---- verificacao das unidades (chkdsk online, so leitura)
-  if ($Testes -contains 'disco') {
-    Etapa 'Verificacao das unidades (chkdsk online, somente leitura)'
+  # ---- verificacao das unidades
+  # 'disco': chkdsk sem parametros = somente leitura (codigo 0 = sem erros; 2 ou 3 = erros nao corrigidos).
+  # 'disco-corrigir': a mesma analise e, so nas unidades com erro, Repair-Volume -Scan (chkdsk /scan, corrige online).
+  $corrigirDisco = $Testes -contains 'disco-corrigir'
+  if ($Testes -contains 'disco' -or $corrigirDisco) {
+    Etapa "Verificacao das unidades (chkdsk $(if ($corrigirDisco) { 'com correcao automatica dos erros encontrados' } else { 'somente leitura' }))" 'disco'
     $t0 = Get-Date
-    $prof.testes.disco = [ordered]@{ unidades = @(Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.FileSystem -eq 'NTFS' } | ForEach-Object {
-      Log "Verificando $($_.DriveLetter):"
-      $res = try { "$(Repair-Volume -DriveLetter $_.DriveLetter -Scan -ErrorAction Stop)" } catch { "Erro: $($_.Exception.Message)" }
-      [ordered]@{ unidade = "$($_.DriveLetter):"; resultado = $res; ok = ($res -eq 'NoErrorsFound') }
+    $prof.testes.disco = [ordered]@{ modo = $(if ($corrigirDisco) { 'corrigir' } else { 'leitura' }); unidades = @(Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.FileSystem -eq 'NTFS' } | ForEach-Object {
+      $L = "$($_.DriveLetter)"
+      Log "Analisando ${L}: (somente leitura)"
+      $arq = "chkdsk_$L.txt"
+      # se o chkdsk nem iniciar (sem permissao), o erro nao pode derrubar as outras unidades
+      $cod = $null
+      try { $saida = & chkdsk.exe "${L}:" 2>&1; $cod = $LASTEXITCODE } catch { $saida = "chkdsk nao executou: $(Primeira-Linha $_.Exception.Message)" }
+      $saida | Out-File (Join-Path $pasta $arq) -Encoding UTF8
+      $res = if ($cod -eq 0) { 'NoErrorsFound' } elseif ($cod -in 2, 3) { 'ErrorsFoundNotFixed' } elseif ($null -eq $cod) { "Erro: $saida" } else { "Erro: chkdsk terminou com codigo $cod" }
+      $achou = $cod -in 2, 3
+      $corrigido = $false
+      if ($achou -and $corrigirDisco) {
+        Log "  Erros em ${L}: - corrigindo (chkdsk /scan)"
+        $res = try { "$(Repair-Volume -DriveLetter $L -Scan -ErrorAction Stop)" } catch { "Erro: $($_.Exception.Message)" }
+        $corrigido = $res -in 'ScanErrorsFoundAndFixedOnline', 'NoErrorsFound'
+        if ($res -eq 'NoErrorsFound') { $res = 'ScanErrorsFoundAndFixedOnline' }
+      }
+      Log "  ${L}: $res"
+      [ordered]@{ unidade = "${L}:"; resultado = $res; ok = ($cod -eq 0); encontrouErros = $achou; corrigido = $corrigido; codigo = $cod; arquivo = $arq }
     }); minutos = 0 }
     $prof.testes.disco.minutos = Duracao $t0
   }
 
   # ---- integridade do Windows (DISM + SFC em modo verificacao)
   if ($Testes -contains 'sistema') {
-    Etapa 'Integridade da imagem do Windows (DISM /ScanHealth) - pode levar 10 a 30 min'
+    Etapa 'Integridade da imagem do Windows (DISM /ScanHealth) - pode levar 10 a 30 min' 'sistema'
     $t0 = Get-Date
     $dism = try { "$((Repair-WindowsImage -Online -ScanHealth -ErrorAction Stop).ImageHealthState)" } catch { "Erro: $($_.Exception.Message)" }
     Log "DISM: $dism"
@@ -807,7 +1073,7 @@ public static class DiagNativo {
 
   # ---- desempenho (WinSAT)
   if ($Testes -contains 'desempenho') {
-    Etapa 'Avaliacao de desempenho (WinSAT formal) - cerca de 5 min'
+    Etapa 'Avaliacao de desempenho (WinSAT formal) - cerca de 5 min' 'desempenho'
     $t0 = Get-Date
     winsat formal > (Join-Path $pasta 'winsat.txt') 2>&1
     $ws = Get-CimInstance Win32_WinSAT -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -817,11 +1083,42 @@ public static class DiagNativo {
     }
   }
 
+  # ---- benchmark proprio (CPU, memoria, disco)
+  if ($Testes -contains 'benchmark' -and ('DiagNativo' -as [type])) {
+    $nThreads = [Environment]::ProcessorCount
+    Etapa "Benchmark: processador (1 e $nThreads threads), memoria e disco - cerca de 1 min" 'benchmark'
+    $t0 = Get-Date
+    $bm = [ordered]@{ threads = $nThreads }
+    $bm.cpuMono = [math]::Round([DiagNativo]::BenchCpu(1, 5), 1)
+    $bm.cpuMulti = [math]::Round([DiagNativo]::BenchCpu($nThreads, 8), 1)
+    $bm.errosCalculo = [DiagNativo]::ErrosCalculo
+    $bm.escala = $(if ($bm.cpuMono -gt 0) { [math]::Round($bm.cpuMulti / $bm.cpuMono, 1) })
+    Log "  CPU: $($bm.cpuMono) ciclos/s com 1 thread, $($bm.cpuMulti) com $nThreads ($($bm.escala)x)"
+    $livreMB = [math]::Floor((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1KB)
+    $mbMem = [int][math]::Max(32, [math]::Min(256, [math]::Floor($livreMB / 6)))
+    try { $bm.memoriaMBs = [math]::Round([DiagNativo]::BenchMemoria($mbMem, 4)); Log "  Memoria: $($bm.memoriaMBs) MB/s (copia de blocos de $mbMem MB)" } catch { Log "  AVISO: benchmark de memoria falhou: $($_.Exception.Message)" }
+    $arqB = Join-Path $env:TEMP "diag_bench_$stamp.tmp"
+    $unB = Split-Path $arqB -Qualifier
+    $livreD = (Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$unB'" -ErrorAction SilentlyContinue).FreeSpace
+    $mbD = if ($livreD -gt 4GB) { 1024 } elseif ($livreD -gt 1GB) { 256 } else { 0 }
+    $bm.disco = [ordered]@{ unidade = $unB; mb = $mbD }
+    if ($mbD) {
+      try {
+        $rd = [DiagNativo]::BenchDisco($arqB, $mbD, 5)
+        $bm.disco.escritaMBs = [math]::Round($rd[0], 1); $bm.disco.leituraMBs = [math]::Round($rd[1], 1); $bm.disco.leitura4kIops = [math]::Round($rd[2])
+        Log "  Disco ${unB} escrita $($bm.disco.escritaMBs) MB/s, leitura $($bm.disco.leituraMBs) MB/s, 4K aleatorio $($bm.disco.leitura4kIops) IOPS"
+      } catch { $bm.disco.erro = $_.Exception.Message; Log "  AVISO: benchmark de disco falhou: $($bm.disco.erro)" }
+      Remove-Item -LiteralPath $arqB -Force -ErrorAction SilentlyContinue
+    } else { $bm.disco.erro = 'Pouco espaco livre para o teste' }
+    $bm.minutos = Duracao $t0
+    $prof.testes.benchmark = $bm
+  }
+
   # ---- memoria RAM dentro do Windows
   if ($Testes -contains 'memoria' -and ('DiagNativo' -as [type])) {
     $livreMB = [math]::Floor((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1KB)
     $alvo = [math]::Max(256, [math]::Min($livreMB - 1536, [math]::Floor($livreMB * 0.85)))
-    Etapa "Memoria RAM: $alvo MB livres testados por $Minutos min (padroes gravados e conferidos)"
+    Etapa "Memoria RAM: $alvo MB livres testados por $Minutos min (padroes gravados e conferidos)" 'memoria'
     $t0 = Get-Date
     $r = [DiagNativo]::TestarMemoria([long]$alvo, $Minutos * 60)
     $prof.testes.memoria = [ordered]@{ mbTestados = $r[2]; mbLivres = $livreMB; passadas = $r[0]; erros = $r[1]; minutos = Duracao $t0 }
@@ -830,20 +1127,22 @@ public static class DiagNativo {
 
   # ---- estresse do processador + temperatura e frequencia
   if ($Testes -contains 'estresse' -and ('DiagNativo' -as [type])) {
-    Etapa "Estresse do processador por $Minutos min: $([Environment]::ProcessorCount) threads a 100%, uma por processador logico (o PC fica lento)"
+    Etapa "Estresse do processador por $Minutos min: $([Environment]::ProcessorCount) threads a 100%, uma por processador logico (o PC fica lento)" 'estresse'
     $t0 = Get-Date
     $amostra = {
       $pi = Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation -Filter "Name='_Total'" -ErrorAction SilentlyContinue
-      $tz = @(Get-CimInstance -Namespace root\wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue | ForEach-Object { [math]::Round($_.CurrentTemperature / 10 - 273.15, 1) } | Where-Object { $_ -gt 5 -and $_ -lt 130 })
-      [pscustomobject]@{ desempenhoPct = $pi.PercentProcessorPerformance; mhz = $pi.ProcessorFrequency; usoPct = $pi.PercentProcessorTime; temp = $(if ($tz) { ($tz | Measure-Object -Maximum).Maximum }) }
+      # temperatura: ultima leitura do monitor de sensores (processador; zona ACPI sem o LibreHardwareMonitor)
+      [pscustomobject]@{ desempenhoPct = $pi.PercentProcessorPerformance; mhz = $pi.ProcessorFrequency; usoPct = $pi.PercentProcessorTime; temp = $mon.cpuTemp }
     }
     $base = & $amostra
     [DiagNativo]::IniciarEstresse([Environment]::ProcessorCount)
     $amostras = New-Object System.Collections.Generic.List[object]
+    $abortado = $null
     try {
       while (((Get-Date) - $t0).TotalSeconds -lt $Minutos * 60) {
         Start-Sleep -Seconds 5
         $a = & $amostra; $amostras.Add($a)
+        if ($a.temp -and $a.temp -ge $TempLimite) { $abortado = "Interrompido: $($a.temp) C, limite de $TempLimite C"; Log "  $abortado"; break }
         if ($amostras.Count % 12 -eq 0) { Log ("  {0:N0} min - uso {1}% - desempenho {2}% - {3}" -f ((Get-Date) - $t0).TotalMinutes, $a.usoPct, $a.desempenhoPct, $(if ($a.temp) { "$($a.temp) C" } else { 'temperatura n/d' })) }
       }
     } finally { [DiagNativo]::PararEstresse() }
@@ -851,11 +1150,15 @@ public static class DiagNativo {
     $limit = @(try { Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-Processor-Power'; Id = 37; StartTime = $t0 } -ErrorAction Stop } catch { }).Count
     $whea = @(try { Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WHEA-Logger'; StartTime = $t0 } -ErrorAction Stop } catch { }).Count
     $des = @($amostras | ForEach-Object { $_.desempenhoPct } | Where-Object { $_ -ne $null })
+    # temperatura identica do inicio ao fim sob 100% de carga e valor fixo (zona ACPI falsa): descarta
+    $temps = @($amostras | ForEach-Object { $_.temp } | Where-Object { $_ })
+    if ($amostras.Count -ge 6 -and @($temps | Select-Object -Unique).Count -le 1) { $amostras | ForEach-Object { $_.temp = $null }; $base.temp = $null }
     $prof.testes.estresse = [ordered]@{
       minutos = Duracao $t0; threads = [Environment]::ProcessorCount; ciclos = [DiagNativo]::Ciclos; errosCalculo = [DiagNativo]::ErrosCalculo
       usoMedioPct = & $med 'usoPct'; desempenhoInicialPct = $base.desempenhoPct; desempenhoMedioPct = & $med 'desempenhoPct'
       desempenhoMinPct = $(if ($des) { ($des | Measure-Object -Minimum).Minimum }); mhzMedio = & $med 'mhz'
       tempInicial = $base.temp; tempMax = $(($amostras | Where-Object temp | Measure-Object temp -Maximum).Maximum); eventosLimitacao = $limit; errosWhea = $whea
+      abortado = $abortado
     }
     Log "Estresse: erros de calculo $([DiagNativo]::ErrosCalculo), desempenho medio $($prof.testes.estresse.desempenhoMedioPct)%, temp max $($prof.testes.estresse.tempMax)"
   }
@@ -864,7 +1167,7 @@ public static class DiagNativo {
   if ($Testes -contains 'rede') {
     $gw = @($saude.rede | Where-Object { $_.gateway } | ForEach-Object { ($_.gateway -split ',\s*')[0] }) | Select-Object -First 1
     $alvos = @(@($gw, '8.8.8.8') | Where-Object { $_ })
-    Etapa "Rede: ping continuo por $Minutos min em $($alvos -join ' e ')"
+    Etapa "Rede: ping continuo por $Minutos min em $($alvos -join ' e ')" 'rede'
     $t0 = Get-Date
     $res = @{}; foreach ($a in $alvos) { $res[$a] = New-Object System.Collections.Generic.List[object] }
     while (((Get-Date) - $t0).TotalSeconds -lt $Minutos * 60) {
@@ -890,7 +1193,7 @@ public static class DiagNativo {
   # ---- antivirus
   $tipoAv = if ($Testes -contains 'antivirus-completo') { 'FullScan' } elseif ($Testes -contains 'antivirus') { 'QuickScan' }
   if ($tipoAv) {
-    Etapa "Microsoft Defender: verificacao $(if ($tipoAv -eq 'FullScan') { 'COMPLETA (pode levar horas)' } else { 'rapida' })"
+    Etapa "Microsoft Defender: verificacao $(if ($tipoAv -eq 'FullScan') { 'COMPLETA (pode levar horas)' } else { 'rapida' })" 'antivirus'
     $t0 = Get-Date
     $erroAv = $null
     try { Start-MpScan -ScanType $tipoAv -ErrorAction Stop } catch { $erroAv = $_.Exception.Message }
@@ -909,7 +1212,7 @@ public static class DiagNativo {
     $prof.testes.superficie = [ordered]@{ discos = @() }
     foreach ($d in $dd) {
       $gb = [math]::Round($d.Size / 1GB, 1)
-      Etapa "Superficie do disco $($d.Index) - $($d.Model) ($gb GB): leitura completa, somente leitura"
+      Etapa "Superficie do disco $($d.Index) - $($d.Model) ($gb GB): leitura completa, somente leitura" 'superficie'
       $t0 = Get-Date
       $r = New-Object DiagLeitura
       $erroAbrir = $null
@@ -941,10 +1244,19 @@ public static class DiagNativo {
     }
   }
 
+  $mon.fase = 'fim'; $mon.parar = $true
+  try { [void]$psMon.EndInvoke($hMon) } catch { Log "AVISO: monitor de sensores: $($_.Exception.Message)" }
+  $psMon.Dispose()
   if ('DiagNativo' -as [type]) { [DiagNativo]::ManterAcordado($false) }
   $prof.fim = Fmt-Data (Get-Date)
   $prof.minutosTotal = [math]::Round(((Get-Date) - [datetime]$prof.inicio).TotalMinutes, 1)
 }
+
+if (-not $Testes) {
+  Log 'Sensores (temperaturas, tensoes, ventoinhas)'
+  try { & $sensorLoop $mon $sensorCsv $sensorDll $intervaloSensor $true } catch { $mon.erro = $_.Exception.Message }
+}
+try { $saude.sensores = Resumo-Sensores } catch { Log "AVISO: resumo dos sensores: $($_.Exception.Message)" }
 
 $saude | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $pasta '06_saude.json') -Encoding UTF8
 
@@ -964,6 +1276,7 @@ $progs = foreach ($raiz in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Unin
 @($progs | Sort-Object Programa -Unique) | Export-Csv (Join-Path $pasta '08_programas.csv') -NoTypeInformation -Encoding UTF8
 
 # ================================================================ 10. resumo
+# Obs.: @($null) tem 1 elemento; por isso as listas abaixo passam por Where-Object { $_ }
 Log 'Gerando resumo'
 $r = New-Object System.Collections.Generic.List[string]
 $r.Add("DIAGNOSTICO - $env:COMPUTERNAME - $($inicio.ToString('yyyy-MM-dd HH:mm:ss')) ($((Get-TimeZone).Id))")
@@ -973,47 +1286,70 @@ $r.Add('')
 $r.Add('=== HARDWARE ===')
 if ($saude.cpu) { $r.Add("CPU: $($saude.cpu.nome) - carga $($saude.cpu.cargaPct)%$(if ($saude.temperaturaCpu) { " - $($saude.temperaturaCpu) C" })") }
 if ($saude.memoria) { $r.Add("Memoria: $($saude.memoria.totalGB) GB, uso $($saude.memoria.usoPct)% ($(@($saude.memoria.modulos).Count) modulo(s) de $($saude.memoria.slotsTotal) slots)") }
-foreach ($g in @($saude.video)) { $r.Add("Video: $($g.nome) - driver $($g.driverVersao) ($($g.driverData))") }
-foreach ($d in @($saude.discos)) { $r.Add("Disco: $($d.nome) - $($d.tipo) $($d.gb) GB - saude: $($d.saude) - temp: $($d.temperatura) C - desgaste: $($d.desgastePct)% - horas: $($d.horasLigado)") }
-foreach ($v in @($saude.volumes)) { $r.Add("Unidade $($v.letra) $($v.livreGB) GB livres de $($v.totalGB) GB ($($v.livrePct)%)$(if ($v.verificacaoPendente) { ' - VERIFICACAO DE DISCO PENDENTE' })") }
+foreach ($g in @($saude.video | Where-Object { $_ })) { $r.Add("Video: $($g.nome) - driver $($g.driverVersao) ($($g.driverData))") }
+foreach ($d in @($saude.discos | Where-Object { $_ })) { $r.Add("Disco: $($d.nome) - $($d.tipo) $($d.gb) GB - saude: $($d.saude) - temp: $($d.temperatura) C - desgaste: $($d.desgastePct)% - horas: $($d.horasLigado)") }
+foreach ($v in @($saude.volumes | Where-Object { $_ })) { $r.Add("Unidade $($v.letra) $($v.livreGB) GB livres de $($v.totalGB) GB ($($v.livrePct)%)$(if ($v.verificacaoPendente) { ' - VERIFICACAO DE DISCO PENDENTE' })") }
 $r.Add('')
 $r.Add('=== PROBLEMAS ENCONTRADOS ===')
 $p = 0
-foreach ($d in @($saude.discos)) { if ($d.saude -and $d.saude -ne 'Healthy') { $r.Add("- Disco $($d.nome): saude $($d.saude)"); $p++ } }
+foreach ($d in @($saude.discos | Where-Object { $_ })) { if ($d.saude -and $d.saude -ne 'Healthy') { $r.Add("- Disco $($d.nome): saude $($d.saude)"); $p++ } }
 if (@($saude.smart | Where-Object { $_.falhaPrevista })) { $r.Add('- SMART: falha de disco prevista'); $p++ }
-foreach ($x in @($saude.dispositivosProblema)) { $r.Add("- Dispositivo: $($x.nome) - codigo $($x.codigo) $($x.descricao)"); $p++ }
-foreach ($s in @($saude.servicos)) { if ($s.inicio -eq 'Auto' -and $s.estado -ne 'Running') { $r.Add("- Servico parado: $($s.descricao)"); $p++ } }
-foreach ($t in @($saude.conectividade)) { if (-not $t.ok) { $r.Add("- Falhou: $($t.teste) ($($t.alvo))"); $p++ } }
+foreach ($x in @($saude.dispositivosProblema | Where-Object { $_ })) { $r.Add("- Dispositivo: $($x.nome) - codigo $($x.codigo) $($x.descricao)"); $p++ }
+foreach ($s in @($saude.servicos | Where-Object { $_ })) { if ($s.inicio -eq 'Auto' -and $s.estado -ne 'Running') { $r.Add("- Servico parado: $($s.descricao)"); $p++ } }
+foreach ($t in @($saude.conectividade | Where-Object { $_ })) { if (-not $t.ok) { $r.Add("- Falhou: $($t.teste) ($($t.alvo))"); $p++ } }
 if ($saude.ativacao -and -not $saude.ativacao.ativado) { $r.Add("- Windows: $($saude.ativacao.status)"); $p++ }
 if ($saude.sistema.reinicioPendente) { $r.Add('- Reinicio pendente (atualizacoes)'); $p++ }
 foreach ($k in 'telaAzul', 'erroHardware', 'erroDisco', 'driverVideo', 'desligamentoInesperado') { if ($ev[$k].total) { $r.Add("- $k : $($ev[$k].total) evento(s), ultimo $($ev[$k].ultimo)"); $p++ } }
-foreach ($sa in @($saude.smartAtributos)) { foreach ($at in @($sa.atributos)) { if ($at.id -in 5, 187, 197, 198 -and $at.bruto -gt 0) { $r.Add("- SMART $($at.nome): $($at.bruto)"); $p++ } } }
+foreach ($sa in @($saude.smartAtributos | Where-Object { $_ })) { foreach ($at in @($sa.atributos | Where-Object { $_ })) { if ($at.id -in 5, 187, 197, 198 -and $at.bruto -gt 0) { $r.Add("- SMART $($at.nome): $($at.bruto)"); $p++ } } }
 foreach ($tm in @($saude.testeMemoriaWindows | Where-Object { $_.comErros })) { $r.Add("- Teste de memoria do Windows com erros em $($tm.hora)"); $p++ }
 if ($saude.inicializacaoTempo -and $saude.inicializacaoTempo.mediaSeg -gt 120) { $r.Add("- Inicializacao lenta: media de $($saude.inicializacaoTempo.mediaSeg) s"); $p++ }
+$sensLinhas = @()
+foreach ($x in @($saude.sensores.itens | Where-Object { $_ })) {
+  if ($x.tipo -eq 'tensao' -and $x.hwTipo -notmatch '^(Cpu|Gpu)') {
+    $nom = Tensao-Nominal $x.nome
+    if ($nom -and ([math]::Abs($x.min - $nom) / $nom -gt 0.05 -or [math]::Abs($x.max - $nom) / $nom -gt 0.05)) {
+      $r.Add("- Tensao $($x.nome) fora de +/-5% ($($x.min) a $($x.max) V) - confirme com multimetro"); $p++
+    }
+  }
+  if ($x.tipo -eq 'temperatura' -and $x.hwTipo -match '^(Cpu|Gpu)' -and $x.max -ge 95) { $r.Add("- Temperatura alta: $($x.hw) $($x.nome) chegou a $($x.max) C"); $p++ }
+  if ($x.tipo -eq 'ventoinha' -and $x.inicial -gt 0 -and $x.min -eq 0 -and $x.hwTipo -notmatch '^Gpu') { $r.Add("- Ventoinha $($x.nome) ($($x.hw)) parou durante o monitoramento"); $p++ }
+  if ($x.tipo -in 'temperatura', 'tensao', 'ventoinha', 'potencia') { $sensLinhas += "$($x.hw) - $($x.nome): $($x.min) a $($x.max) $($x.unidade) (inicial $($x.inicial))" }
+}
 if ($saude.profundo) {
   $T = $saude.profundo.testes
   if ($T.sistema -and ($T.sistema.dism -ne 'Healthy' -or $T.sistema.sfc -ne 'Sem violacoes')) { $r.Add("- Integridade do Windows: DISM $($T.sistema.dism) / SFC $($T.sistema.sfc)"); $p++ }
-  foreach ($u in @($T.disco.unidades)) { if (-not $u.ok) { $r.Add("- Verificacao da unidade $($u.unidade): $($u.resultado)"); $p++ } }
-  foreach ($d in @($T.superficie.discos)) { if ($d.areasComErro -or $d.erro) { $r.Add("- Superficie do disco $($d.disco): $($d.areasComErro) area(s) com erro de leitura $($d.erro)"); $p++ } }
+  foreach ($u in @($T.disco.unidades | Where-Object { $_ })) { if (-not $u.ok) { $r.Add("- Verificacao da unidade $($u.unidade): $($u.resultado)"); $p++ } }
+  foreach ($d in @($T.superficie.discos | Where-Object { $_ })) { if ($d.areasComErro -or $d.erro) { $r.Add("- Superficie do disco $($d.disco): $($d.areasComErro) area(s) com erro de leitura $($d.erro)"); $p++ } }
   if ($T.memoria -and $T.memoria.erros) { $r.Add("- Teste de memoria: $($T.memoria.erros) erro(s)"); $p++ }
+  if ($T.benchmark -and $T.benchmark.errosCalculo) { $r.Add("- Benchmark: $($T.benchmark.errosCalculo) erro(s) de calculo do processador"); $p++ }
+  if ($T.estresse -and $T.estresse.abortado) { $r.Add("- Estresse do processador: $($T.estresse.abortado)"); $p++ }
   if ($T.estresse -and ($T.estresse.errosCalculo -or $T.estresse.errosWhea)) { $r.Add("- Estresse do processador: $($T.estresse.errosCalculo) erro(s) de calculo, $($T.estresse.errosWhea) erro(s) WHEA"); $p++ }
-  foreach ($a in @($T.rede.alvos)) { if ($a.perdaPct -gt 1) { $r.Add("- Rede ($($a.nome)): $($a.perdaPct)% de perda"); $p++ } }
+  foreach ($a in @($T.rede.alvos | Where-Object { $_ })) { if ($a.perdaPct -gt 1) { $r.Add("- Rede ($($a.nome)): $($a.perdaPct)% de perda"); $p++ } }
   if ($T.antivirus -and @($T.antivirus.ameacas).Count) { $r.Add("- Antivirus: $(@($T.antivirus.ameacas).Count) ameaca(s) encontrada(s)"); $p++ }
+  if (-not $p) { $r.Add('Nenhum problema identificado automaticamente.'); $semProblemaDito = $true }
   $r.Add('')
   $r.Add("=== TESTES PROFUNDOS ($($saude.profundo.minutosTotal) min) ===")
   if ($T.sistema) { $r.Add("Integridade: DISM $($T.sistema.dism) - SFC $($T.sistema.sfc)") }
-  foreach ($u in @($T.disco.unidades)) { $r.Add("chkdsk $($u.unidade): $($u.resultado)") }
-  foreach ($d in @($T.superficie.discos)) { $r.Add("Superficie disco $($d.disco) $($d.modelo): $($d.lidoGB) de $($d.gb) GB lidos, media $($d.mediaMBs) MB/s, minimo $($d.minMBs) MB/s, blocos lentos $($d.blocosLentos), areas com erro $($d.areasComErro)") }
+  foreach ($u in @($T.disco.unidades | Where-Object { $_ })) { $r.Add("chkdsk $($u.unidade): $($u.resultado)") }
+  foreach ($d in @($T.superficie.discos | Where-Object { $_ })) { $r.Add("Superficie disco $($d.disco) $($d.modelo): $($d.lidoGB) de $($d.gb) GB lidos, media $($d.mediaMBs) MB/s, minimo $($d.minMBs) MB/s, blocos lentos $($d.blocosLentos), areas com erro $($d.areasComErro)") }
+  if ($T.benchmark) { $r.Add("Benchmark: CPU $($T.benchmark.cpuMono) ciclos/s (1 thread), $($T.benchmark.cpuMulti) ($($T.benchmark.threads) threads) - memoria $($T.benchmark.memoriaMBs) MB/s - disco $($T.benchmark.disco.unidade) escrita $($T.benchmark.disco.escritaMBs) MB/s, leitura $($T.benchmark.disco.leituraMBs) MB/s, 4K $($T.benchmark.disco.leitura4kIops) IOPS") }
   if ($T.desempenho) { $r.Add("WinSAT: CPU $($T.desempenho.processador) - memoria $($T.desempenho.memoria) - disco $($T.desempenho.disco) - video $($T.desempenho.graficos)") }
   if ($T.memoria) { $r.Add("Memoria: $($T.memoria.mbTestados) MB, $($T.memoria.passadas) passada(s), $($T.memoria.erros) erro(s)") }
   if ($T.estresse) { $r.Add("Estresse CPU: $($T.estresse.minutos) min, desempenho medio $($T.estresse.desempenhoMedioPct)% (min $($T.estresse.desempenhoMinPct)%), temp max $($T.estresse.tempMax), erros de calculo $($T.estresse.errosCalculo)") }
-  foreach ($a in @($T.rede.alvos)) { $r.Add("Rede $($a.nome) ($($a.alvo)): perda $($a.perdaPct)%, media $($a.mediaMs) ms, max $($a.maxMs) ms, jitter $($a.jitterMs) ms") }
+  foreach ($a in @($T.rede.alvos | Where-Object { $_ })) { $r.Add("Rede $($a.nome) ($($a.alvo)): perda $($a.perdaPct)%, media $($a.mediaMs) ms, max $($a.maxMs) ms, jitter $($a.jitterMs) ms") }
   if ($T.antivirus) { $r.Add("Antivirus ($($T.antivirus.tipo)): $(@($T.antivirus.ameacas).Count) ameaca(s)") }
   if ($T.energia) { $r.Add("Energia (powercfg): $($T.energia.erros) erro(s), $($T.energia.avisos) aviso(s)") }
 }
-if (-not $p) { $r.Add('Nenhum problema identificado automaticamente.') }
+if (-not $p -and -not $semProblemaDito) { $r.Add('Nenhum problema identificado automaticamente.') }
+if ($saude.sensores) {
+  $r.Add('')
+  $r.Add("=== SENSORES ($($saude.sensores.amostras) amostra(s) - $($saude.sensores.fonte)) ===")
+  if ($saude.sensores.aviso) { $r.Add("AVISO: $($saude.sensores.aviso)") }
+  $sensLinhas | ForEach-Object { $r.Add($_) }
+  if (-not $sensorDll) { $r.Add('Tensoes da fonte e ventoinhas: coloque o LibreHardwareMonitor na pasta "sensores" (baixar-sensores.ps1).') }
+}
 $r.Add('')
-$r.Add('Detalhes: 06_saude.json (abra no visualizador), 07_eventos_erros.csv, 08_programas.csv, 09_drivers.csv.')
+$r.Add('Detalhes: 06_saude.json (abra no visualizador), 07_eventos_erros.csv, 08_programas.csv, 09_drivers.csv, 10_sensores.csv.')
 $r | Set-Content (Join-Path $pasta '00_RESUMO.txt') -Encoding UTF8
 
 # ================================================================ 11. hashes e zip
