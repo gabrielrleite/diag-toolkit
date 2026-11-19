@@ -40,8 +40,6 @@ async function renderReceb(arg) {
   const r = await api('api/recebimentos?linhas=1').catch(() => null);
   RB.folhas = r && r.ok ? await r.json() : [];
   const regs = RB.folhas.flatMap(f => f.linhas.map(l => ({ ...l, folha: f })));
-  const porSelb = new Map();
-  for (const l of regs) if (l.selb) porSelb.set(l.selb.toUpperCase(), (porSelb.get(l.selb.toUpperCase()) || 0) + 1);
   const pend = regs.filter(l => !l.revisado).length;
   el.innerHTML = `
     <div class="panel">
@@ -74,7 +72,7 @@ async function renderReceb(arg) {
     $('#rbRegs').innerHTML = `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Local</th><th class="nosort">SELB</th><th class="nosort">Data</th><th class="nosort">Folha</th></tr></thead><tbody>
       ${filtrados.slice(0, 1000).map(l => `<tr data-folha="${esc(l.folha.id)}~${l.n}">
         <td>${esc(l.local || '—')}</td>
-        <td>${esc(l.selb || '—')}${l.selb && porSelb.get(l.selb.toUpperCase()) > 1 ? ' <span class="badge warn" title="Mesmo SELB em mais de uma linha">repetido</span>' : ''}</td>
+        <td>${esc(l.selb || '—')}</td>
         <td class="t">${esc(l.data || '—')}</td>
         <td><small>${esc(l.folha.titulo || l.folha.id)} · linha ${l.n}</small>${l.revisado ? '' : ' <span class="badge warn">conferir</span>'}</td></tr>`).join('')}
       </tbody></table></div>${filtrados.length > 1000 ? '<p class="muted">Mostrando os primeiros 1000. Refine a busca.</p>' : ''}`;
@@ -118,9 +116,20 @@ async function ocrWorker(progresso) {
 }
 
 // ================================================================== importação
+// valores já usados (locais e SELB) para autocompletar e corrigir a leitura
+async function carregarVocab() {
+  if (!RB.folhas.length || !RB.folhas[0].linhas) {
+    const r = await api('api/recebimentos?linhas=1').catch(() => null);
+    if (r && r.ok) RB.folhas = await r.json();
+  }
+  const conta = k => { const m = new Map(); for (const f of RB.folhas) for (const l of f.linhas || []) if (l[k]) m.set(l[k], (m.get(l[k]) || 0) + 1); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); };
+  RB.vocab = { local: conta('local'), selb: conta('selb') };
+}
+
 async function renderImportar() {
   const el = $('#mod-receb');
   if (!(await needServer(el))) return;
+  carregarVocab().catch(() => {});
   RB.imp = { fila: [], i: 0 };
   el.innerHTML = `<div class="panel">
     <div class="head-row"><div><a href="#receb" class="btn small ghost">← Recebimentos</a> <b class="ld-title">Importar folhas</b></div></div>
@@ -226,8 +235,9 @@ function renderAjuste() {
         ${imp.fila.length > 1 ? '<button class="btn ghost small" id="rbPular">Pular esta folha</button>' : ''}
         <button class="btn ghost" id="rbGirar" title="Gira a orientação da tabela em 90°">Girar 90°</button>
         <button class="btn ghost" id="rbRedet">Detectar de novo</button>
+        <button class="btn ghost" id="rbManual" title="Sem tabela/OCR: digita as linhas olhando a imagem">Digitar manualmente</button>
         <button class="btn" id="rbLer">Ler folha (OCR)</button></div></div>
-    ${A.auto ? '' : '<p class="note">Não encontrei a tabela automaticamente. Arraste os 4 cantos até os cantos da tabela.</p>'}
+    ${A.auto ? '' : '<p class="note">Não encontrei a tabela automaticamente. Arraste os 4 cantos até os cantos da tabela ou use <b>Digitar manualmente</b> para lançar as linhas olhando a imagem.</p>'}
     <p class="muted">Confira se os 4 cantos estão nos cantos externos da tabela (arraste para ajustar). À direita, a folha corrigida:
       <span style="color:var(--ok)">verde</span> = célula vazia, <span style="color:var(--bad)">vermelho</span> = célula com escrita (vai para o OCR).
       O cabeçalho (${COLS.map(c => esc(c.rotulo)).join(', ')}) deve ficar em cima; se não estiver, use <b>Girar 90°</b>.</p>
@@ -298,6 +308,7 @@ function renderAjuste() {
   });
   if ($('#rbPular')) $('#rbPular').addEventListener('click', proximaFolha);
   $('#rbLer').addEventListener('click', () => lerFolha());
+  $('#rbManual').addEventListener('click', montarManual);
   desenhar(); previa();
 }
 
@@ -395,13 +406,26 @@ function montarRevisao(lidos) {
     const L = lidos[r] || {};
     if (!lidos[r] && !(A.comEscrita && A.comEscrita.has(r))) continue;
     const l = { n: r - r0 + 1, revisado: false, escrita: true, conf: {}, dataIso: '' };
+    l.dica = {};
     for (const c of CAMPOS) {
       const v = L[c.k];
       l[c.k] = '';
       if (!v) continue;
       l.conf[c.k] = v.conf;
-      if (c.k === 'data') { const d = RecebOCR.limparData(v.texto, anoPadrao); l.data = d.valor; l.dataIso = d.iso; }
-      else l[c.k] = RecebOCR.limparTexto(v.texto).toUpperCase();
+      if (c.k === 'data') {
+        const d = RecebOCR.limparData(v.texto, anoPadrao);
+        // leitura ruim e inválida: melhor vazio (com a leitura como dica) do que lixo no campo
+        if (!d.ok && v.conf < 50) { l.dica.data = { tipo: 'incerto', texto: v.texto.trim() }; continue; }
+        l.data = d.valor; l.dataIso = d.iso;
+        continue;
+      }
+      const t = RecebOCR.limparTexto(v.texto).toUpperCase();
+      // compara com o que já foi cadastrado (cursiva costuma sair "parecida")
+      const sug = t && RecebOCR.sugerir(t, (RB.vocab && RB.vocab[c.k]) || [], c.k === 'selb' ? 0.8 : 0.7);
+      if (sug && RecebOCR.normalizar(sug.valor) !== RecebOCR.normalizar(t)) { l[c.k] = sug.valor; l.dica[c.k] = { tipo: 'lista', texto: t, sim: sug.sim }; }
+      else if (sug) l[c.k] = sug.valor;
+      else if (v.conf < 40) l.dica[c.k] = { tipo: 'incerto', texto: t };
+      else l[c.k] = t;
     }
     linhas.push(l);
   }
@@ -420,6 +444,26 @@ function montarRevisao(lidos) {
   renderFolhaEditor(folha, imgs, { nova: true, nLinhas: G.rows.length - 1 - r0, fotoOriginal: URL.createObjectURL(A.file) + (A.pagina ? '#page=' + A.pagina : '') });
 }
 
+// sem tabela detectada (ou sem OCR): folha vazia para digitar, com a imagem inteira para consulta
+function imagemReduzida(canvas, max = 1800) {
+  const k = Math.min(1, max / Math.max(canvas.width, canvas.height));
+  const c = document.createElement('canvas'); c.width = Math.round(canvas.width * k); c.height = Math.round(canvas.height * k);
+  c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
+  return c;
+}
+function montarManual() {
+  const A = RB.imp.atual;
+  A.manual = true;
+  const folha = {
+    titulo: A.file.name.replace(/\.[^.]+$/, '') + (A.paginas > 1 ? ` – pág. ${A.pagina}` : ''), obs: '', dataFolha: '',
+    linhas: [novaLinha(1)], grade: null,
+  };
+  RB.cur = folha; RB.dirty = true;
+  renderFolhaEditor(folha, {}, { nova: true, manual: true, imagem: imagemReduzida(A.canvas).toDataURL('image/jpeg', 0.85),
+    fotoOriginal: URL.createObjectURL(A.file) + (A.pagina ? '#page=' + A.pagina : '') });
+}
+const novaLinha = n => ({ n, revisado: false, conf: {}, selb: '', data: '', dataIso: '', local: '', escrita: false });
+
 // ================================================================== editor (nova folha ou existente)
 function renderFolhaEditor(F, imgs, opt = {}) {
   const el = $('#mod-receb');
@@ -430,7 +474,7 @@ function renderFolhaEditor(F, imgs, opt = {}) {
         <b class="ld-title">${opt.nova ? `Conferir folha${imp && imp.fila.length > 1 ? ` ${imp.i + 1} de ${imp.fila.length}` : ''}` : esc(F.titulo || F.id)}</b>
         ${opt.nova ? '<span class="badge warn">ainda não salva</span>' : `<small class="mono">${esc(F.id)} · rev. ${F.revisao}</small>`}</div>
       <div class="filters" style="margin:0">
-        ${opt.nova ? '<button class="btn ghost" id="rbVoltarAj">Ajustar cantos</button>' : `<button class="btn ghost small" id="rbExcluir">Excluir folha</button>`}${opt.fotoOriginal ? `<a class="btn ghost small" href="${opt.fotoOriginal}" target="_blank" rel="noopener">${/#page=/.test(opt.fotoOriginal) ? 'PDF original' : 'Foto original'}</a>` : ''}
+        ${opt.nova ? `<button class="btn ghost" id="rbVoltarAj">${opt.manual ? 'Voltar ao ajuste' : 'Ajustar cantos'}</button>` : `<button class="btn ghost small" id="rbExcluir">Excluir folha</button>`}${opt.fotoOriginal ? `<a class="btn ghost small" href="${opt.fotoOriginal}" target="_blank" rel="noopener">${/#page=/.test(opt.fotoOriginal) ? 'PDF original' : 'Foto original'}</a>` : ''}
         <button class="btn ghost" id="rbTodas">Marcar todas como conferidas</button>
         <button class="btn" id="rbSalvar">${opt.nova ? 'Salvar folha' : 'Salvar'}</button></div>
     </div>
@@ -440,11 +484,20 @@ function renderFolhaEditor(F, imgs, opt = {}) {
         <label>Data da folha <input type="date" id="rbData" value="${esc(F.dataFolha)}"></label>
         <label class="full">Observações <textarea id="rbObs" rows="2" maxlength="2000">${esc(F.obs)}</textarea></label>
       </div>
-      ${opt.nova ? `<p class="note info">${F.linhas.length} linha(s) com escrita de ${opt.nLinhas}. O OCR leu ${CAMPOS.map(c => c.rotulo).join(', ')}: confira com a foto da linha e corrija o que for preciso.
+      ${opt.manual ? `<p class="note info">Lançamento manual: digite ${CAMPOS.map(c => c.rotulo).join(', ')} de cada entrega olhando a imagem abaixo. Linhas sem nada preenchido são descartadas ao salvar.</p>` : ''}
+      ${opt.nova && !opt.manual ? `<p class="note info">${F.linhas.length} linha(s) com escrita de ${opt.nLinhas}. O OCR leu ${CAMPOS.map(c => c.rotulo).join(', ')}: confira com a foto da linha e corrija o que for preciso.
         ${esc(NA_IMAGEM)} não são digitados: ficam na foto da folha. Campos em <span class="bad-txt">vermelho</span> têm baixa confiança ou formato inválido.</p>` : ''}
     </div>
-    <div class="panel"><div class="head-row"><h2>Linhas</h2><button class="btn ghost small" id="rbAdd">Adicionar linha</button></div>
-      <div id="rbLinhas" class="rb-linhas"></div></div>`;
+    ${opt.imagem ? `<div class="panel"><div class="head-row"><h2>Folha</h2><small class="muted">clique na imagem para ampliar</small></div>
+      <figure class="rb-fig rb-folha"><img class="rb-strip" src="${opt.imagem}" alt="Imagem da folha"></figure></div>` : ''}
+    <div class="panel"><div class="head-row"><h2>Linhas</h2><div class="filters" style="margin:0">
+        <button class="btn ghost small" id="rbDatas" title="Usa a data da folha nas linhas sem data">Preencher datas vazias</button>
+        <button class="btn ghost small" id="rbAdd">Adicionar linha</button></div></div>
+      <div id="rbLinhas" class="rb-linhas"></div>
+      <datalist id="rbDlLocal"></datalist><datalist id="rbDlSelb"></datalist></div>`;
+  const opcoes = k => [...new Set([...F.linhas.map(l => l[k]).filter(Boolean), ...((RB.vocab && RB.vocab[k]) || [])])].slice(0, 500).map(v => `<option value="${esc(v)}">`).join('');
+  const listas = () => { $('#rbDlLocal').innerHTML = opcoes('local'); $('#rbDlSelb').innerHTML = opcoes('selb'); };
+  if (!RB.vocab) carregarVocab().then(listas).catch(() => {});
   const marcarSujo = () => { RB.dirty = true; };
   const desenhar = () => {
     const box = $('#rbLinhas');
@@ -452,10 +505,15 @@ function renderFolhaEditor(F, imgs, opt = {}) {
     F.linhas.sort((a, b) => a.n - b.n);
     box.innerHTML = F.linhas.map((l, i) => {
       const campo = c => {
-        const v = l[c.k] || '', conf = l.conf && l.conf[c.k];
-        const ruim = (c.k === 'data' && v && !dataOk(v)) || (conf != null && conf < 60 && !l.revisado);
+        const v = l[c.k] || '', conf = l.conf && l.conf[c.k], dica = l.dica && l.dica[c.k];
+        const ruim = (c.k === 'data' && v && !dataOk(v)) || (conf != null && conf < 60 && !l.revisado) || (dica && !l.revisado);
+        const lista = c.k === 'local' ? 'rbDlLocal' : c.k === 'selb' ? 'rbDlSelb' : '';
+        const txtDica = !dica ? '' : dica.tipo === 'lista'
+          ? `OCR leu “${esc(dica.texto)}” → corrigido pela lista <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar “${esc(dica.texto)}”</button>`
+          : `ilegível para o OCR${dica.texto ? ` (leu “${esc(dica.texto)}”)` : ''}: digite olhando a foto`;
         return `<label class="rb-c rb-${c.k}">${esc(c.rotulo)}${conf != null ? ` <small title="confiança do OCR">${conf}%</small>` : ''}
-          <input data-i="${i}" data-k="${c.k}" value="${esc(v)}" class="${ruim ? 'rb-ruim' : ''}" maxlength="${c.k === 'local' ? 160 : 40}"></label>`;
+          <input data-i="${i}" data-k="${c.k}" value="${esc(v)}" class="${ruim ? 'rb-ruim' : ''}" maxlength="${c.k === 'local' ? 160 : 40}" ${lista ? `list="${lista}"` : ''} ${c.k === 'data' ? 'placeholder="dd/mm/aaaa"' : ''} autocomplete="off">
+          ${txtDica ? `<small class="rb-dica">${txtDica}</small>` : ''}</label>`;
       };
       const src = imgs && imgs[l.n];
       return `<div class="rb-linha ${l.revisado ? 'ok' : ''} ${opt.linha === l.n ? 'rb-alvo' : ''}" data-n="${l.n}">
@@ -470,8 +528,21 @@ function renderFolhaEditor(F, imgs, opt = {}) {
       const l = F.linhas[+inp.dataset.i], k = inp.dataset.k;
       l[k] = inp.value; marcarSujo();
       if (l.conf) delete l.conf[k]; // corrigido à mão
+      if (l.dica) delete l.dica[k];
       inp.classList.remove('rb-ruim');
       if (k === 'data') { const d = RecebOCR.limparData(inp.value); l.dataIso = d.iso; inp.classList.toggle('rb-ruim', !!inp.value && !d.ok); }
+    }));
+    // Enter vai para o próximo campo (digitação rápida)
+    const todos = [...box.querySelectorAll('input[data-k]')];
+    todos.forEach((inp, j) => inp.addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (todos[j + 1]) todos[j + 1].focus(); else $('#rbAdd').click(); // no último campo, Enter cria nova linha
+    }));
+    box.querySelectorAll('[data-usar]').forEach(b => b.addEventListener('click', e => {
+      e.preventDefault();
+      const l = F.linhas[+b.dataset.usar], k = b.dataset.k;
+      l[k] = l.dica[k].texto; delete l.dica[k]; marcarSujo(); desenhar();
     }));
     box.querySelectorAll('input[data-k="data"]').forEach(inp => inp.addEventListener('blur', () => {
       const d = RecebOCR.limparData(inp.value); if (d.ok) { inp.value = d.valor; F.linhas[+inp.dataset.i].data = d.valor; }
@@ -490,12 +561,21 @@ function renderFolhaEditor(F, imgs, opt = {}) {
   $('#rbTit').addEventListener('input', e => { F.titulo = e.target.value; marcarSujo(); });
   $('#rbData').addEventListener('input', e => { F.dataFolha = e.target.value; marcarSujo(); });
   $('#rbObs').addEventListener('input', e => { F.obs = e.target.value; marcarSujo(); });
+  // adiciona a próxima linha livre e já coloca o cursor nela
   $('#rbAdd').addEventListener('click', () => {
     const usados = new Set(F.linhas.map(l => l.n));
     let n = 1; while (usados.has(n)) n++;
-    const novo = window.prompt('Número da linha na folha:', String(n));
-    if (novo === null) return;
-    F.linhas.push({ n: Math.max(1, parseInt(novo, 10) || n), revisado: false, conf: {}, selb: '', data: '', dataIso: '', local: '', escrita: true });
+    F.linhas.push(novaLinha(n));
+    marcarSujo(); desenhar();
+    const inp = $(`#rbLinhas .rb-linha[data-n="${n}"] input[data-k]`); if (inp) { inp.scrollIntoView({ block: 'center' }); inp.focus(); }
+  });
+  if ($('.rb-folha .rb-strip')) $('.rb-folha .rb-strip').addEventListener('click', e => e.target.closest('.rb-fig').classList.toggle('zoom'));
+  $('#rbDatas').addEventListener('click', () => {
+    if (!F.dataFolha) return alert('Preencha a "Data da folha" primeiro.');
+    const d = RecebOCR.limparData(F.dataFolha.split('-').reverse().join('/'));
+    let n = 0;
+    F.linhas.forEach(l => { if (!l.data) { l.data = d.valor; l.dataIso = d.iso; if (l.dica) delete l.dica.data; n++; } });
+    if (!n) return alert('Nenhuma linha sem data.');
     marcarSujo(); desenhar();
   });
   $('#rbTodas').addEventListener('click', () => { F.linhas.forEach(l => { l.revisado = true; }); marcarSujo(); desenhar(); });
@@ -510,7 +590,7 @@ function renderFolhaEditor(F, imgs, opt = {}) {
     const btn = e.target; btn.disabled = true;
     try { opt.nova ? await salvarNova(F) : await salvarExistente(F); } finally { if (document.body.contains(btn)) btn.disabled = false; }
   });
-  desenhar();
+  desenhar(); listas();
 }
 
 async function enviarAnexo(id, blob, nome, legenda) {
@@ -522,13 +602,15 @@ async function enviarAnexo(id, blob, nome, legenda) {
 
 async function salvarNova(F) {
   const A = RB.imp.atual;
+  F.linhas = F.linhas.filter(l => l.escrita || CAMPOS.some(c => (l[c.k] || '').trim()));
   const r = await api('api/recebimentos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(F) }).catch(() => null);
   if (!r || !r.ok) { const e = r ? (await r.json().catch(() => ({}))).erro : ''; return alert('Não foi possível salvar: ' + (e || 'servidor indisponível.')); }
   const salvo = await r.json();
   // imagem retificada (usada para mostrar os recortes das linhas) + foto original
-  const ret = recorte(A.R, { x: 0, y: 0, w: A.R.w, h: A.R.h }, 0, false);
+  // manual: sem retificada; guarda a imagem da folha (útil para PDF, que o navegador não mostra inline)
+  const ret = A.manual ? imagemReduzida(A.canvas, 2400) : recorte(A.R, { x: 0, y: 0, w: A.R.w, h: A.R.h }, 0, false);
   const blobRet = await new Promise(ok => ret.toBlob(ok, 'image/jpeg', 0.82));
-  const okRet = await enviarAnexo(salvo.id, blobRet, 'folha-retificada.jpg', 'Folha retificada');
+  const okRet = A.manual ? await enviarAnexo(salvo.id, blobRet, 'folha.jpg', 'Folha (imagem)') : await enviarAnexo(salvo.id, blobRet, 'folha-retificada.jpg', 'Folha retificada');
   // PDF: guarda o arquivo inteiro e a página da folha na legenda
   const legOrig = A.pagina ? `Arquivo original (pág. ${A.pagina}${A.paginas > 1 ? ` de ${A.paginas}` : ''})` : 'Foto original';
   const arq = A.pagina && !A.file.type ? new Blob([A.file], { type: 'application/pdf' }) : A.file;
@@ -561,6 +643,9 @@ async function abrirFolha(id, linha = 0) {
   const ret = anx.find(a => a.legenda === 'Folha retificada'), orig = anx.find(a => /^(Foto|Arquivo) original/.test(a.legenda));
   const pag = orig && (orig.legenda.match(/pág\. (\d+)/) || [])[1];
   const imgs = {};
+  let imagem = '';
+  const inteira = anx.find(a => a.legenda === 'Folha (imagem)') || (!(F.grade && F.grade.linhas.length > 1) && (ret || (orig && /^image\//.test(orig.tipo) && orig)));
+  if (inteira) imagem = await api(url(inteira)).then(x => x.ok ? x.blob() : null).then(b => b ? URL.createObjectURL(b) : '').catch(() => '');
   if (ret && F.grade && F.grade.linhas.length > 1) {
     try {
       const b = await api(url(ret)).then(x => x.blob());
@@ -575,7 +660,7 @@ async function abrirFolha(id, linha = 0) {
       URL.revokeObjectURL(u);
     } catch { /* sem recortes */ }
   }
-  renderFolhaEditor(F, imgs, { fotoOriginal: orig ? url(orig) + (pag ? '#page=' + pag : '') : '', linha });
+  renderFolhaEditor(F, imgs, { fotoOriginal: orig ? url(orig) + (pag ? '#page=' + pag : '') : '', linha, imagem });
 }
 
 // arrastar imagens para a tela de importação (chamado pelo tratador de "soltar" do app.js)
