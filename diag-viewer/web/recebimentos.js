@@ -18,7 +18,7 @@ const FOLHA_MODELO = {
   ],
   cabecalho: true, // primeira linha da grade é o cabeçalho
 };
-const RB = { folhas: [], q: '', cur: null, dirty: false, imp: null, worker: null, carregandoOcr: null };
+const RB = { folhas: [], q: '', fSelb: '', fLocal: '', cur: null, dirty: false, imp: null, worker: null, carregandoOcr: null };
 const COLS = FOLHA_MODELO.colunas;
 // o que aparece na tela e é digitado, na ordem de exibição
 const CAMPOS = ['local', 'selb', 'data'].map(k => COLS.find(c => c.k === k)).filter(c => c && c.ler);
@@ -59,26 +59,55 @@ async function renderReceb(arg) {
     </div>
     ${regs.length ? `<div class="panel">
       <div class="head-row"><h2>Recebimentos</h2><button class="btn ghost small" id="rbCsv">Exportar CSV</button></div>
-      <div class="filters"><label>Buscar <input type="search" id="rbQ" value="${esc(RB.q)}" placeholder="SELB, local, data..." style="min-width:260px"></label>
-        <label class="chk"><input type="checkbox" id="rbPend"> só não conferidos</label><span class="muted" id="rbN"></span></div>
+      <div class="filters">
+        <label>SELB <input type="search" id="rbFSelb" value="${esc(RB.fSelb)}" list="rbDlFSelb" placeholder="todos" style="width:130px" autocomplete="off"></label>
+        <label>Local <input type="search" id="rbFLocal" value="${esc(RB.fLocal)}" list="rbDlFLocal" placeholder="todos" style="min-width:220px" autocomplete="off"></label>
+        <label>Buscar <input type="search" id="rbQ" value="${esc(RB.q)}" placeholder="data, folha..." style="min-width:180px"></label>
+        <label class="chk"><input type="checkbox" id="rbPend"> só não conferidos</label>
+        <button class="btn ghost small" id="rbLimpar">Limpar filtros</button><span class="muted" id="rbN"></span></div>
+      <datalist id="rbDlFSelb">${[...new Set(regs.map(l => l.selb).filter(Boolean))].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
+      <datalist id="rbDlFLocal">${[...new Set(regs.map(l => l.local).filter(Boolean))].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
+      <p class="muted" id="rbResumo" style="margin:0 0 8px"></p>
       <div id="rbRegs"></div></div>` : ''}`;
   el.querySelectorAll('[data-folha]').forEach(tr => tr.addEventListener('click', () => { location.hash = 'receb/' + tr.dataset.folha; }));
   if (!regs.length) return;
   let filtrados = regs;
+  // filtros sem diferenciar acento/maiúscula; SELB ignora espaços e pontuação
+  const N = RecebOCR.normalizar, chave = v => N(v).replace(/ /g, '');
+  for (const l of regs) l._busca = N([l.selb, l.data, l.local, l.folha.titulo].join(' '));
+  regs.sort((a, b) => String(b.dataIso || b.folha.criadoEm).localeCompare(String(a.dataIso || a.folha.criadoEm)) || a.n - b.n);
   const draw = () => {
-    const q = RB.q.trim().toLowerCase(), so = $('#rbPend').checked;
-    filtrados = regs.filter(l => (!so || !l.revisado) && (!q || [l.selb, l.data, l.local, l.folha.titulo].join(' ').toLowerCase().includes(q)));
+    const q = N(RB.q), fs = chave(RB.fSelb), fl = N(RB.fLocal), so = $('#rbPend').checked;
+    filtrados = regs.filter(l => (!so || !l.revisado) && (!fs || chave(l.selb).includes(fs)) && (!fl || N(l.local).includes(fl)) && (!q || l._busca.includes(q)));
     $('#rbN').textContent = `${filtrados.length} de ${regs.length}`;
+    // resumo do filtro: por SELB mostra os locais por onde passou; por local, quantos SELB diferentes
+    let resumo = '';
+    if ((fs || fl) && filtrados.length) {
+      const conta = k => { const m = new Map(); for (const l of filtrados) if (l[k]) m.set(l[k], (m.get(l[k]) || 0) + 1); return [...m.entries()].sort((a, b) => b[1] - a[1]); };
+      const ult = filtrados[0];
+      resumo = fs ? `${filtrados.length} entrega(s) · locais: ${conta('local').map(([v, n]) => `${esc(v)} (${n})`).join(', ') || '—'} · última: ${esc(ult.data || '—')} em ${esc(ult.local || '—')}`
+        : `${filtrados.length} entrega(s) · ${conta('selb').length} SELB diferente(s)`;
+    }
+    $('#rbResumo').innerHTML = resumo;
     $('#rbRegs').innerHTML = `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Local</th><th class="nosort">SELB</th><th class="nosort">Data</th><th class="nosort">Folha</th></tr></thead><tbody>
       ${filtrados.slice(0, 1000).map(l => `<tr data-folha="${esc(l.folha.id)}~${l.n}">
-        <td>${esc(l.local || '—')}</td>
-        <td>${esc(l.selb || '—')}</td>
+        <td>${l.local ? `<button class="linklike" data-filtro="local" data-v="${esc(l.local)}" title="Filtrar por este local">${esc(l.local)}</button>` : '—'}</td>
+        <td>${l.selb ? `<button class="linklike" data-filtro="selb" data-v="${esc(l.selb)}" title="Filtrar por este SELB">${esc(l.selb)}</button>` : '—'}</td>
         <td class="t">${esc(l.data || '—')}</td>
         <td><small>${esc(l.folha.titulo || l.folha.id)} · linha ${l.n}</small>${l.revisado ? '' : ' <span class="badge warn">conferir</span>'}</td></tr>`).join('')}
       </tbody></table></div>${filtrados.length > 1000 ? '<p class="muted">Mostrando os primeiros 1000. Refine a busca.</p>' : ''}`;
     $('#rbRegs').querySelectorAll('[data-folha]').forEach(tr => tr.addEventListener('click', () => { location.hash = 'receb/' + tr.dataset.folha; }));
+    // clicar no SELB ou no local filtra por ele (em vez de abrir a folha)
+    $('#rbRegs').querySelectorAll('[data-filtro]').forEach(b => b.addEventListener('click', e => {
+      e.stopPropagation();
+      if (b.dataset.filtro === 'selb') { RB.fSelb = b.dataset.v; $('#rbFSelb').value = RB.fSelb; } else { RB.fLocal = b.dataset.v; $('#rbFLocal').value = RB.fLocal; }
+      draw();
+    }));
   };
   $('#rbQ').addEventListener('input', e => { RB.q = e.target.value; draw(); });
+  $('#rbFSelb').addEventListener('input', e => { RB.fSelb = e.target.value; draw(); });
+  $('#rbFLocal').addEventListener('input', e => { RB.fLocal = e.target.value; draw(); });
+  $('#rbLimpar').addEventListener('click', () => { RB.q = RB.fSelb = RB.fLocal = ''; $('#rbQ').value = $('#rbFSelb').value = $('#rbFLocal').value = ''; $('#rbPend').checked = false; draw(); });
   $('#rbPend').addEventListener('change', draw);
   $('#rbCsv').addEventListener('click', () => {
     const cel = v => /[";\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
@@ -86,7 +115,7 @@ async function renderReceb(arg) {
       ...filtrados.map(l => [l.local, l.selb, l.data, l.folha.titulo || l.folha.id, l.n, l.revisado ? 'sim' : 'não'].map(cel).join(';'))];
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob(['﻿' + linhas.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
-    a.download = `recebimentos-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    a.download = `recebimentos${RB.fSelb ? '-selb-' + chave(RB.fSelb) : ''}-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   });
   draw();
