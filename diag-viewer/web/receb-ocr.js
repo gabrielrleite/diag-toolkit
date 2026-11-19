@@ -360,7 +360,33 @@ const RecebOCR = (() => {
     return String(s || '').replace(/[|_[\]{}<>~^`"“”]/g, ' ').replace(/\s+/g, ' ').replace(/^[\s.,;:'\-]+|[\s.,;:'\-]+$/g, '').trim();
   }
 
+  // ---------------------------------------------------------------- correção pela lista de valores conhecidos
+  const normalizar = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+  function levenshtein(a, b) {
+    if (a === b) return 0;
+    let ant = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(ant[j] + 1, cur[j - 1] + 1, ant[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      ant = cur;
+    }
+    return ant[b.length];
+  }
+  // 0..1 (1 = igual), ignorando acentos, caixa, pontuação e espaços
+  function similaridade(a, b) {
+    const x = normalizar(a).replace(/ /g, ''), y = normalizar(b).replace(/ /g, '');
+    if (!x || !y) return 0;
+    return 1 - levenshtein(x, y) / Math.max(x.length, y.length);
+  }
+  // melhor valor da lista parecido com o texto lido (ou null)
+  function sugerir(texto, lista, minimo = 0.72) {
+    let melhor = null;
+    for (const v of lista) { const s = similaridade(texto, v); if (s >= minimo && (!melhor || s > melhor.sim)) melhor = { valor: v, sim: s }; }
+    return melhor;
+  }
+
   return {
+    normalizar, similaridade, sugerir,
     cinza, reduzir, binarizar, mascarasLinhas, detectarCantos, homografia, aplicar, cantosGirados, retificar,
     analisarGrade, celula, tinta, temConteudo, scoreLarguras, cpfValido, limparCpf, limparData, limparTexto, soDigitos,
   };

@@ -118,9 +118,20 @@ async function ocrWorker(progresso) {
 }
 
 // ================================================================== importação
+// valores já usados (locais e SELB) para autocompletar e corrigir a leitura
+async function carregarVocab() {
+  if (!RB.folhas.length || !RB.folhas[0].linhas) {
+    const r = await api('api/recebimentos?linhas=1').catch(() => null);
+    if (r && r.ok) RB.folhas = await r.json();
+  }
+  const conta = k => { const m = new Map(); for (const f of RB.folhas) for (const l of f.linhas || []) if (l[k]) m.set(l[k], (m.get(l[k]) || 0) + 1); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); };
+  RB.vocab = { local: conta('local'), selb: conta('selb') };
+}
+
 async function renderImportar() {
   const el = $('#mod-receb');
   if (!(await needServer(el))) return;
+  carregarVocab().catch(() => {});
   RB.imp = { fila: [], i: 0 };
   el.innerHTML = `<div class="panel">
     <div class="head-row"><div><a href="#receb" class="btn small ghost">← Recebimentos</a> <b class="ld-title">Importar folhas</b></div></div>
@@ -395,13 +406,26 @@ function montarRevisao(lidos) {
     const L = lidos[r] || {};
     if (!lidos[r] && !(A.comEscrita && A.comEscrita.has(r))) continue;
     const l = { n: r - r0 + 1, revisado: false, escrita: true, conf: {}, dataIso: '' };
+    l.dica = {};
     for (const c of CAMPOS) {
       const v = L[c.k];
       l[c.k] = '';
       if (!v) continue;
       l.conf[c.k] = v.conf;
-      if (c.k === 'data') { const d = RecebOCR.limparData(v.texto, anoPadrao); l.data = d.valor; l.dataIso = d.iso; }
-      else l[c.k] = RecebOCR.limparTexto(v.texto).toUpperCase();
+      if (c.k === 'data') {
+        const d = RecebOCR.limparData(v.texto, anoPadrao);
+        // leitura ruim e inválida: melhor vazio (com a leitura como dica) do que lixo no campo
+        if (!d.ok && v.conf < 50) { l.dica.data = { tipo: 'incerto', texto: v.texto.trim() }; continue; }
+        l.data = d.valor; l.dataIso = d.iso;
+        continue;
+      }
+      const t = RecebOCR.limparTexto(v.texto).toUpperCase();
+      // compara com o que já foi cadastrado (cursiva costuma sair "parecida")
+      const sug = t && RecebOCR.sugerir(t, (RB.vocab && RB.vocab[c.k]) || [], c.k === 'selb' ? 0.8 : 0.7);
+      if (sug && RecebOCR.normalizar(sug.valor) !== RecebOCR.normalizar(t)) { l[c.k] = sug.valor; l.dica[c.k] = { tipo: 'lista', texto: t, sim: sug.sim }; }
+      else if (sug) l[c.k] = sug.valor;
+      else if (v.conf < 40) l.dica[c.k] = { tipo: 'incerto', texto: t };
+      else l[c.k] = t;
     }
     linhas.push(l);
   }
@@ -443,8 +467,14 @@ function renderFolhaEditor(F, imgs, opt = {}) {
       ${opt.nova ? `<p class="note info">${F.linhas.length} linha(s) com escrita de ${opt.nLinhas}. O OCR leu ${CAMPOS.map(c => c.rotulo).join(', ')}: confira com a foto da linha e corrija o que for preciso.
         ${esc(NA_IMAGEM)} não são digitados: ficam na foto da folha. Campos em <span class="bad-txt">vermelho</span> têm baixa confiança ou formato inválido.</p>` : ''}
     </div>
-    <div class="panel"><div class="head-row"><h2>Linhas</h2><button class="btn ghost small" id="rbAdd">Adicionar linha</button></div>
-      <div id="rbLinhas" class="rb-linhas"></div></div>`;
+    <div class="panel"><div class="head-row"><h2>Linhas</h2><div class="filters" style="margin:0">
+        <button class="btn ghost small" id="rbDatas" title="Usa a data da folha nas linhas sem data">Preencher datas vazias</button>
+        <button class="btn ghost small" id="rbAdd">Adicionar linha</button></div></div>
+      <div id="rbLinhas" class="rb-linhas"></div>
+      <datalist id="rbDlLocal"></datalist><datalist id="rbDlSelb"></datalist></div>`;
+  const opcoes = k => [...new Set([...F.linhas.map(l => l[k]).filter(Boolean), ...((RB.vocab && RB.vocab[k]) || [])])].slice(0, 500).map(v => `<option value="${esc(v)}">`).join('');
+  const listas = () => { $('#rbDlLocal').innerHTML = opcoes('local'); $('#rbDlSelb').innerHTML = opcoes('selb'); };
+  if (!RB.vocab) carregarVocab().then(listas).catch(() => {});
   const marcarSujo = () => { RB.dirty = true; };
   const desenhar = () => {
     const box = $('#rbLinhas');
@@ -452,10 +482,15 @@ function renderFolhaEditor(F, imgs, opt = {}) {
     F.linhas.sort((a, b) => a.n - b.n);
     box.innerHTML = F.linhas.map((l, i) => {
       const campo = c => {
-        const v = l[c.k] || '', conf = l.conf && l.conf[c.k];
-        const ruim = (c.k === 'data' && v && !dataOk(v)) || (conf != null && conf < 60 && !l.revisado);
+        const v = l[c.k] || '', conf = l.conf && l.conf[c.k], dica = l.dica && l.dica[c.k];
+        const ruim = (c.k === 'data' && v && !dataOk(v)) || (conf != null && conf < 60 && !l.revisado) || (dica && !l.revisado);
+        const lista = c.k === 'local' ? 'rbDlLocal' : c.k === 'selb' ? 'rbDlSelb' : '';
+        const txtDica = !dica ? '' : dica.tipo === 'lista'
+          ? `OCR leu “${esc(dica.texto)}” → corrigido pela lista <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar “${esc(dica.texto)}”</button>`
+          : `ilegível para o OCR${dica.texto ? ` (leu “${esc(dica.texto)}”)` : ''}: digite olhando a foto`;
         return `<label class="rb-c rb-${c.k}">${esc(c.rotulo)}${conf != null ? ` <small title="confiança do OCR">${conf}%</small>` : ''}
-          <input data-i="${i}" data-k="${c.k}" value="${esc(v)}" class="${ruim ? 'rb-ruim' : ''}" maxlength="${c.k === 'local' ? 160 : 40}"></label>`;
+          <input data-i="${i}" data-k="${c.k}" value="${esc(v)}" class="${ruim ? 'rb-ruim' : ''}" maxlength="${c.k === 'local' ? 160 : 40}" ${lista ? `list="${lista}"` : ''} ${c.k === 'data' ? 'placeholder="dd/mm/aaaa"' : ''} autocomplete="off">
+          ${txtDica ? `<small class="rb-dica">${txtDica}</small>` : ''}</label>`;
       };
       const src = imgs && imgs[l.n];
       return `<div class="rb-linha ${l.revisado ? 'ok' : ''} ${opt.linha === l.n ? 'rb-alvo' : ''}" data-n="${l.n}">
@@ -470,8 +505,17 @@ function renderFolhaEditor(F, imgs, opt = {}) {
       const l = F.linhas[+inp.dataset.i], k = inp.dataset.k;
       l[k] = inp.value; marcarSujo();
       if (l.conf) delete l.conf[k]; // corrigido à mão
+      if (l.dica) delete l.dica[k];
       inp.classList.remove('rb-ruim');
       if (k === 'data') { const d = RecebOCR.limparData(inp.value); l.dataIso = d.iso; inp.classList.toggle('rb-ruim', !!inp.value && !d.ok); }
+    }));
+    // Enter vai para o próximo campo (digitação rápida)
+    const todos = [...box.querySelectorAll('input[data-k]')];
+    todos.forEach((inp, j) => inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); (todos[j + 1] || inp).focus(); } }));
+    box.querySelectorAll('[data-usar]').forEach(b => b.addEventListener('click', e => {
+      e.preventDefault();
+      const l = F.linhas[+b.dataset.usar], k = b.dataset.k;
+      l[k] = l.dica[k].texto; delete l.dica[k]; marcarSujo(); desenhar();
     }));
     box.querySelectorAll('input[data-k="data"]').forEach(inp => inp.addEventListener('blur', () => {
       const d = RecebOCR.limparData(inp.value); if (d.ok) { inp.value = d.valor; F.linhas[+inp.dataset.i].data = d.valor; }
@@ -498,6 +542,14 @@ function renderFolhaEditor(F, imgs, opt = {}) {
     F.linhas.push({ n: Math.max(1, parseInt(novo, 10) || n), revisado: false, conf: {}, selb: '', data: '', dataIso: '', local: '', escrita: true });
     marcarSujo(); desenhar();
   });
+  $('#rbDatas').addEventListener('click', () => {
+    if (!F.dataFolha) return alert('Preencha a "Data da folha" primeiro.');
+    const d = RecebOCR.limparData(F.dataFolha.split('-').reverse().join('/'));
+    let n = 0;
+    F.linhas.forEach(l => { if (!l.data) { l.data = d.valor; l.dataIso = d.iso; if (l.dica) delete l.dica.data; n++; } });
+    if (!n) return alert('Nenhuma linha sem data.');
+    marcarSujo(); desenhar();
+  });
   $('#rbTodas').addEventListener('click', () => { F.linhas.forEach(l => { l.revisado = true; }); marcarSujo(); desenhar(); });
   if ($('#rbVoltarAj')) $('#rbVoltarAj').addEventListener('click', () => { if (confirm('Voltar ao ajuste descarta as correções desta folha. Continuar?')) { RB.dirty = false; RB.cur = null; renderAjuste(); } });
   if ($('#rbExcluir')) $('#rbExcluir').addEventListener('click', async () => {
@@ -510,7 +562,7 @@ function renderFolhaEditor(F, imgs, opt = {}) {
     const btn = e.target; btn.disabled = true;
     try { opt.nova ? await salvarNova(F) : await salvarExistente(F); } finally { if (document.body.contains(btn)) btn.disabled = false; }
   });
-  desenhar();
+  desenhar(); listas();
 }
 
 async function enviarAnexo(id, blob, nome, legenda) {

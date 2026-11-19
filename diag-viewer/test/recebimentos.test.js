@@ -45,3 +45,12 @@ const cheias = [];
 for (let r = 0; r < 6; r++) for (let c = 0; c < 5; c++) if (O.temConteudo(O.tinta(G, R, O.celula(G, r, c)))) cheias.push(`${r},${c}`);
 assert.deepStrictEqual(cheias, ['2,2']);
 console.log('recebimentos: ok');
+
+// correção pela lista de valores já cadastrados
+const locais = ['SALA 204 BLOCO B', 'ALMOXARIFADO', 'RECEPÇÃO'];
+assert.strictEqual(O.sugerir('ALMOXARIFAD0', locais).valor, 'ALMOXARIFADO');
+assert.strictEqual(O.sugerir('RECEPCAO', locais).valor, 'RECEPÇÃO');
+assert.strictEqual(O.sugerir('SALA 2O4 BL0CO B', locais).valor, 'SALA 204 BLOCO B');
+assert.strictEqual(O.sugerir('DIRETORIA', locais), null);
+assert.ok(O.similaridade('abc', 'ABC') === 1 && O.similaridade('', 'x') === 0);
+console.log('recebimentos (sugestões): ok');

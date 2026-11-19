@@ -299,3 +299,5 @@ label.btn.is-disabled { opacity: .45; pointer-events: none; }
 .rb-c input { width: 100%; min-width: 0; font-weight: 400; }
 .rb-c input.rb-ruim { border-color: var(--bad); background: var(--bad-soft); }
 @media (max-width: 900px) { .rb-ajuste { grid-template-columns: 1fr; } .rb-campos { grid-template-columns: 1fr 1fr; } .rb-c.rb-local { grid-column: 1 / -1; } }
+.rb-dica { font-weight: 400; color: var(--warn); font-size: 11.5px; }
+button.linklike { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
