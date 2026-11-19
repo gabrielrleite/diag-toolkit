@@ -126,6 +126,42 @@ async function carregarVocab() {
   RB.vocab = { local: conta('local'), selb: conta('selb') };
 }
 
+// ---------------------------------------------------------------- local pelo histórico do SELB
+const chaveSelb = v => RecebOCR.normalizar(v).replace(/ /g, '');
+// última entrega registrada desse SELB (outras folhas + outras linhas desta folha) e quantas vezes o local se repete
+function historicoSelb(selb, F, linhaAtual) {
+  const k = chaveSelb(selb);
+  if (!k) return null;
+  const regs = [];
+  for (const f of RB.folhas || []) {
+    if (F.id && f.id === F.id) continue; // a folha aberta entra pelas linhas atuais (podem ter mudado)
+    for (const l of f.linhas || []) if (l.local && chaveSelb(l.selb) === k) regs.push({ local: l.local, quando: l.dataIso || (f.criadoEm || '').slice(0, 10) });
+  }
+  for (const l of F.linhas || []) if (l !== linhaAtual && l.local && chaveSelb(l.selb) === k && !(l.dica && l.dica.local && l.dica.local.tipo === 'historico'))
+    regs.push({ local: l.local, quando: l.dataIso || F.dataFolha || '9999' });
+  if (!regs.length) return null;
+  regs.sort((a, b) => String(b.quando).localeCompare(String(a.quando)));
+  const ult = regs[0];
+  return { local: ult.local, quando: ult.quando, vezes: regs.filter(r => RecebOCR.normalizar(r.local) === RecebOCR.normalizar(ult.local)).length };
+}
+// preenche o local pelo histórico quando ele está vazio ou a leitura é duvidosa; senão só sugere
+function aplicarHistorico(l, F) {
+  if (!l.selb) return;
+  const h = historicoSelb(l.selb, F, l);
+  l.dica = l.dica || {};
+  const d = l.dica.local;
+  if (d && (d.tipo === 'historico' || d.tipo === 'histSug')) { delete l.dica.local; if (d.tipo === 'historico') l.local = d.texto || ''; }
+  if (!h || RecebOCR.normalizar(h.local) === RecebOCR.normalizar(l.local)) return;
+  const conf = l.conf && l.conf.local;
+  const duvidoso = !l.local || (d && (d.tipo === 'incerto' || d.tipo === 'lista')) || (conf != null && conf < 60);
+  if (duvidoso) {
+    const lido = d && d.tipo !== 'historico' && d.tipo !== 'histSug' ? d.texto : (d && d.tipo === 'historico' ? d.texto : l.local);
+    l.dica.local = { tipo: 'historico', selb: l.selb, quando: h.quando, vezes: h.vezes, texto: lido || '' };
+    l.local = h.local;
+  } else l.dica.local = { tipo: 'histSug', selb: l.selb, quando: h.quando, vezes: h.vezes, valor: h.local };
+}
+const dataCurta = iso => /^\d{4}-\d{2}-\d{2}$/.test(iso || '') ? iso.split('-').reverse().join('/') : '';
+
 async function renderImportar() {
   const el = $('#mod-receb');
   if (!(await needServer(el))) return;
@@ -429,6 +465,9 @@ function montarRevisao(lidos) {
     }
     linhas.push(l);
   }
+  // local pelo histórico do SELB (outras folhas e linhas anteriores desta)
+  const tmp = { linhas };
+  for (const l of linhas) aplicarHistorico(l, tmp);
   // recorte de cada linha (para conferir lado a lado)
   const imgs = {};
   for (let r = r0; r + 1 < G.rows.length; r++) {
@@ -506,10 +545,15 @@ function renderFolhaEditor(F, imgs, opt = {}) {
     box.innerHTML = F.linhas.map((l, i) => {
       const campo = c => {
         const v = l[c.k] || '', conf = l.conf && l.conf[c.k], dica = l.dica && l.dica[c.k];
-        const ruim = (c.k === 'data' && v && !dataOk(v)) || (conf != null && conf < 60 && !l.revisado) || (dica && !l.revisado);
+        const ruim = (c.k === 'data' && v && !dataOk(v)) || (conf != null && conf < 60 && !l.revisado) || (dica && dica.tipo !== 'historico' && dica.tipo !== 'histSug' && !l.revisado);
         const lista = c.k === 'local' ? 'rbDlLocal' : c.k === 'selb' ? 'rbDlSelb' : '';
+        const quando = dica && dataCurta(dica.quando) ? `, última em ${dataCurta(dica.quando)}` : '';
         const txtDica = !dica ? '' : dica.tipo === 'lista'
           ? `OCR leu “${esc(dica.texto)}” → corrigido pela lista <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar “${esc(dica.texto)}”</button>`
+          : dica.tipo === 'historico'
+          ? `preenchido pelo histórico do SELB ${esc(dica.selb)} (${dica.vezes} entrega${dica.vezes > 1 ? 's' : ''}${quando}) — corrija se mudou${dica.texto ? ` <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar o lido “${esc(dica.texto)}”</button>` : ''}`
+          : dica.tipo === 'histSug'
+          ? `histórico do SELB ${esc(dica.selb)}: “${esc(dica.valor)}”${quando} <button type="button" class="linklike" data-hist="${i}">usar</button>`
           : `ilegível para o OCR${dica.texto ? ` (leu “${esc(dica.texto)}”)` : ''}: digite olhando a foto`;
         return `<label class="rb-c rb-${c.k}">${esc(c.rotulo)}${conf != null ? ` <small title="confiança do OCR">${conf}%</small>` : ''}
           <input data-i="${i}" data-k="${c.k}" value="${esc(v)}" class="${ruim ? 'rb-ruim' : ''}" maxlength="${c.k === 'local' ? 160 : 40}" ${lista ? `list="${lista}"` : ''} ${c.k === 'data' ? 'placeholder="dd/mm/aaaa"' : ''} autocomplete="off">
@@ -529,6 +573,7 @@ function renderFolhaEditor(F, imgs, opt = {}) {
       l[k] = inp.value; marcarSujo();
       if (l.conf) delete l.conf[k]; // corrigido à mão
       if (l.dica) delete l.dica[k];
+      const dc = inp.parentElement.querySelector('.rb-dica'); if (dc) dc.remove(); // corrigido: some o aviso
       inp.classList.remove('rb-ruim');
       if (k === 'data') { const d = RecebOCR.limparData(inp.value); l.dataIso = d.iso; inp.classList.toggle('rb-ruim', !!inp.value && !d.ok); }
     }));
@@ -543,6 +588,26 @@ function renderFolhaEditor(F, imgs, opt = {}) {
       e.preventDefault();
       const l = F.linhas[+b.dataset.usar], k = b.dataset.k;
       l[k] = l.dica[k].texto; delete l.dica[k]; marcarSujo(); desenhar();
+    }));
+    box.querySelectorAll('[data-hist]').forEach(b => b.addEventListener('click', e => {
+      e.preventDefault();
+      const l = F.linhas[+b.dataset.hist], d = l.dica.local;
+      l.dica.local = { ...d, tipo: 'historico', texto: l.local }; l.local = d.valor; marcarSujo(); desenhar();
+    }));
+    // SELB digitado/alterado: busca o local no histórico (sem perder o foco de quem estava digitando)
+    box.querySelectorAll('input[data-k="selb"]').forEach(inp => inp.addEventListener('change', () => {
+      const l = F.linhas[+inp.dataset.i];
+      l.selb = inp.value = inp.value.trim().toUpperCase();
+      const antes = JSON.stringify([l.local, l.dica && l.dica.local]);
+      aplicarHistorico(l, F);
+      if (JSON.stringify([l.local, l.dica && l.dica.local]) === antes) return;
+      marcarSujo();
+      // "change" dispara no meio da troca de foco: redesenha depois, devolvendo o foco ao campo para onde o usuário foi
+      setTimeout(() => {
+        const ativo = document.activeElement, foco = ativo && ativo.dataset && ativo.dataset.k ? [ativo.dataset.i, ativo.dataset.k, ativo.selectionStart] : null;
+        desenhar();
+        if (foco) { const el = box.querySelector(`input[data-i="${foco[0]}"][data-k="${foco[1]}"]`); if (el) { el.focus(); try { el.setSelectionRange(foco[2], foco[2]); } catch { /* sem cursor */ } } }
+      }, 0);
     }));
     box.querySelectorAll('input[data-k="data"]').forEach(inp => inp.addEventListener('blur', () => {
       const d = RecebOCR.limparData(inp.value); if (d.ok) { inp.value = d.valor; F.linhas[+inp.dataset.i].data = d.valor; }
