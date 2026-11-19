@@ -14,6 +14,13 @@ Três módulos:
   - *Certificado digital*: usa o certificado **instalado no Windows** (A1 importado ou A3 em token). O navegador gera o PDF oficial com campo de assinatura e selo visível e abre o **Assinador diag** (link `diagassina:`), que mostra a janela de certificados do Windows (A3 pede o PIN), preenche o selo com titular/CPF mascarado/data, assina (PKCS#7 detached, SHA-256) e envia. O servidor confere integridade, assinatura, validade do certificado e se o PDF é exatamente o preparado; guarda e trava o laudo. Instalação do assinador em cada PC: `http://SERVIDOR/download/` › Agente diag.
   - *Assinatura física*: imprime com linhas em branco; depois *Enviar via assinada* registra a digitalização (PDF/JPG/PNG, com SHA-256) como versão oficial e trava o laudo.
   - *Baixar PDF*: PDF oficial sem assinatura (rascunhos saem com marca d'água).
+- **Recebimentos** (folhas de recebimento assinadas, com OCR): importa fotos ou digitalizações (JPG/PNG/WEBP, várias de uma vez) da folha com colunas SELB, DATA, LOCAL, CPF e NOME (várias entregas por folha).
+  - O navegador acha a tabela sozinho, corrige perspectiva e rotação (foto de lado ou de cabeça para baixo) e mostra a grade detectada; os 4 cantos podem ser arrastados e há *Girar 90°*.
+  - Na tela aparecem só **Local, SELB e Data**: o OCR ([Tesseract.js](https://github.com/naptha/tesseract.js), português, embutido em `web/vendor/tesseract`, sem internet) lê essas colunas nas células com escrita, e tudo pode ser corrigido à mão. A imagem é lida no navegador; vai ao servidor só ao salvar.
+  - CPF e nome/assinatura **não são digitados**: ao abrir o item, cada linha mostra a foto da linha na folha (clique para ampliar) e há o botão *Foto original*. Linha preenchida só com nome/assinatura também é registrada.
+  - Data inválida e leitura com confiança < 60% ficam em vermelho. Cada linha tem *conferida*.
+  - Controle: busca por local, SELB ou data em todas as folhas (clicar abre a folha na linha), filtro de não conferidos, aviso de SELB repetido e exportação CSV. Guarda a foto original e a folha retificada (anexos com SHA-256), revisões e auditoria.
+  - Letra de forma e números costumam ser lidos bem; letra cursiva quase sempre precisa de correção manual. Outro layout de folha ou outras colunas digitadas: ajuste `FOLHA_MODELO` (`ler: true/false`) em `web/recebimentos.js`.
 - **Modelos de laudo** (Laudos › Modelos): título do documento, seções exibidas e seus nomes, testes padrão, conclusões permitidas, textos pré-preenchidos com {patrimonio}/{computador}/{setor}/{local}/{solicitante}/{chamado}/{data}, campos extras (texto, texto longo, data, lista; obrigatórios ou não), texto de encaminhamento e assinaturas adicionais. Vêm 5 modelos padrão (completo, baixa patrimonial, garantia, registro de atendimento, requisição de peças), que podem ser editados, desativados ou restaurados; novos modelos podem ser criados ou duplicados. Cada laudo guarda uma cópia do modelo usado.
 
 Servidor web que recebe as coletas do `diag-hardware.ps1` e ajuda a analisar e gerar o relatório técnico.
@@ -83,8 +90,11 @@ O tráfego é HTTP. Use apenas na rede interna ou coloque atrás de um proxy HTT
 | GET | /api/laudos/:id/assinado | PDF assinado digitalmente |
 | GET | /api/coleta/pacote.zip[?tipo=diagnostico] | scripts (remoção ou diagnóstico) com cfg preenchido |
 | GET/POST | /api/laudos/:id/digitalizado | via física assinada |
+| GET/POST | /api/recebimentos[?linhas=1] | lista / cria folha de recebimento |
+| GET/PUT/DELETE | /api/recebimentos/:id | lê / atualiza (com `revisao`) / remove (fica `.removido`) |
+| ... | /api/recebimentos/:id/anexos[/:aid] | foto original e folha retificada |
 
-Anexos, laudos e modelos usam o mesmo `READ_TOKEN` da interface.
+Anexos, laudos, modelos e recebimentos usam o mesmo `READ_TOKEN` da interface.
 
 ## Sem Docker
 

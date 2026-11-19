@@ -17,6 +17,8 @@
   - GET  /api/laudos/:id/assinado    PDF assinado digitalmente
   - GET/POST /api/laudos/:id/digitalizado   via fisica assinada (digitalizada)
   - GET  /api/coleta/pacote.zip     scripts de coleta com diag-servidor.cfg preenchido
+  - GET/POST /api/recebimentos, GET/PUT/DELETE /api/recebimentos/:id   folhas de recebimento (lidas por OCR no navegador)
+  - .../api/recebimentos/:id/anexos[/:aid]   foto original e imagem retificada da folha
   Sem dependencias externas: so Node.js.
 */
 const http = require('http');
@@ -42,7 +44,8 @@ const ANX_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.w
 fs.mkdirSync(DIR, { recursive: true });
 
 const SEC = {
-  'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'none'",
+  // wasm-unsafe-eval: o OCR (Tesseract) roda em WebAssembly no navegador
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
 };
@@ -166,9 +169,12 @@ async function upload(req, res, url) {
 const LDIR = path.join(DATA, 'laudos');
 fs.mkdirSync(LDIR, { recursive: true });
 const LID_RE = /^\d{4}-\d{4}$/;
+const RDIR = path.join(DATA, 'recebimentos');
+fs.mkdirSync(RDIR, { recursive: true });
+const RID_RE = /^\d{8}-[0-9a-f]{6}$/;
 function owner(tipo, id) {
-  const base = tipo === 'laudo' ? LDIR : DIR;
-  const re = tipo === 'laudo' ? LID_RE : ID_RE;
+  const base = { laudo: LDIR, receb: RDIR }[tipo] || DIR;
+  const re = { laudo: LID_RE, receb: RID_RE }[tipo] || ID_RE;
   return {
     tipo, id, chave: tipo + ':' + id,
     dir: path.join(base, id + '.anexos'),
@@ -244,7 +250,7 @@ async function anexoUpload(req, res, o) {
 
 async function anexoRoute(req, res, url, o, aid) {
   if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
-  if (!o.existe()) { req.resume(); return json(res, 404, { erro: o.tipo === 'laudo' ? 'Laudo não encontrado.' : 'Coleta não encontrada.' }); }
+  if (!o.existe()) { req.resume(); return json(res, 404, { erro: { laudo: 'Laudo não encontrado.', receb: 'Folha não encontrada.' }[o.tipo] || 'Coleta não encontrada.' }); }
   if (!aid) {
     if (req.method === 'GET') return json(res, 200, await readAnx(o));
     if (req.method === 'POST') return anexoUpload(req, res, o);
@@ -256,7 +262,8 @@ async function anexoRoute(req, res, url, o, aid) {
   const file = path.join(o.dir, aid + ANX_TYPES[meta.tipo]);
 
   if (req.method === 'GET') {
-    const st = await fsp.stat(file);
+    const st = await fsp.stat(file).catch(() => null);
+    if (!st) return json(res, 404, { erro: 'Arquivo do anexo não encontrado no servidor.' });
     res.writeHead(200, {
       ...SEC, 'Content-Type': meta.tipo, 'Content-Length': st.size, 'Cache-Control': 'private, max-age=3600',
       'Content-Disposition': `inline; filename="${meta.nome.replace(/[^\w.\- ]/g, '_')}"`, 'X-Sha256': meta.sha256,
@@ -396,6 +403,95 @@ async function laudoRoute(req, res, url, id) {
     if (out.conflito) return json(res, 409, { erro: `O laudo foi alterado em outro lugar (revisão ${out.conflito}). Recarregue antes de salvar.` });
     await audit({ acao: 'laudo_atualizado', laudo: id, revisao: out.revisao, status: out.status, ip });
     return json(res, 200, out);
+  }
+  json(res, 405, { erro: 'Método não permitido.' });
+}
+
+// ------------------------------------------------------------------ folhas de recebimento (OCR)
+// Cada folha: várias linhas (SELB, data, local, CPF, nome). A leitura é feita no navegador;
+// o servidor guarda o resultado conferido, a foto original e a imagem retificada (anexos).
+const COLS_RECEB = ['selb', 'data', 'local', 'cpf', 'nome'];
+function sanitizeFolha(b) {
+  const F = {
+    titulo: txt(b.titulo, 160), obs: txt(b.obs, 2000), dataFolha: /^\d{4}-\d{2}-\d{2}$/.test(b.dataFolha || '') ? b.dataFolha : '',
+    linhas: (Array.isArray(b.linhas) ? b.linhas : []).slice(0, 300).map(l => {
+      const o = { n: Math.max(0, Math.min(999, parseInt(l && l.n, 10) || 0)), revisado: !!(l && l.revisado), escrita: !!(l && l.escrita), conf: {} };
+      for (const k of COLS_RECEB) o[k] = txt(l && l[k], k === 'local' || k === 'nome' ? 160 : 40).replace(/[\r\n\t]+/g, ' ').trim();
+      o.dataIso = /^\d{4}-\d{2}-\d{2}$/.test((l && l.dataIso) || '') ? l.dataIso : '';
+      for (const k of COLS_RECEB) { const c = l && l.conf && +l.conf[k]; if (c >= 0 && c <= 100) o.conf[k] = Math.round(c); }
+      return o;
+    }).filter(l => l.escrita || COLS_RECEB.some(k => l[k])), // escrita: linha preenchida só com nome/assinatura também conta
+    grade: null,
+  };
+  // posições das linhas na imagem retificada (para mostrar o recorte de cada linha)
+  const g = b.grade;
+  if (g && Array.isArray(g.linhas) && g.linhas.length <= 400) {
+    F.grade = { w: +g.w || 0, h: +g.h || 0, linhas: g.linhas.map(v => Math.max(0, Math.round(+v || 0))), colunas: (Array.isArray(g.colunas) ? g.colunas : []).slice(0, 20).map(v => Math.max(0, Math.round(+v || 0))) };
+  }
+  return F;
+}
+const resumoFolha = f => ({
+  id: f.id, titulo: f.titulo, dataFolha: f.dataFolha, criadoEm: f.criadoEm, atualizadoEm: f.atualizadoEm, revisao: f.revisao,
+  total: f.linhas.length, pendentes: f.linhas.filter(l => !l.revisado).length,
+});
+async function listFolhas(completo) {
+  const names = (await fsp.readdir(RDIR)).filter(n => n.endsWith('.json') && RID_RE.test(n.slice(0, -5)));
+  const out = [];
+  for (const n of names) {
+    try {
+      const f = JSON.parse(await fsp.readFile(path.join(RDIR, n), 'utf8'));
+      out.push(completo ? { ...resumoFolha(f), linhas: f.linhas } : resumoFolha(f));
+    } catch { /* ignora */ }
+  }
+  return out.sort((a, b) => String(b.criadoEm).localeCompare(String(a.criadoEm)));
+}
+async function recebRoute(req, res, url, id) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  const ip = ipOf(req);
+  if (!id) {
+    if (req.method === 'GET') return json(res, 200, await listFolhas(url.searchParams.get('linhas') === '1'));
+    if (req.method === 'POST') {
+      let body;
+      try { body = await readJsonBody(req, 500000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+      const agora = new Date();
+      const nid = agora.toISOString().slice(0, 10).replace(/-/g, '') + '-' + crypto.randomBytes(3).toString('hex');
+      const f = { id: nid, revisao: 1, criadoEm: agora.toISOString(), atualizadoEm: agora.toISOString(), criadoPorIp: ip, ...sanitizeFolha(body) };
+      await writeJsonAtomic(path.join(RDIR, nid + '.json'), f);
+      await audit({ acao: 'folha_recebimento_criada', folha: nid, linhas: f.linhas.length, ip });
+      return json(res, 201, f);
+    }
+    return json(res, 405, { erro: 'Método não permitido.' });
+  }
+  if (!RID_RE.test(id)) { req.resume(); return json(res, 400, { erro: 'id de folha inválido' }); }
+  const file = path.join(RDIR, id + '.json');
+  if (req.method === 'GET') {
+    const f = await fsp.readFile(file, 'utf8').catch(() => null);
+    return f ? json(res, 200, JSON.parse(f)) : json(res, 404, { erro: 'Folha não encontrada.' });
+  }
+  if (req.method === 'PUT') {
+    let body;
+    try { body = await readJsonBody(req, 500000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+    const out = await withLock('receb:' + id, async () => {
+      const atual = JSON.parse(await fsp.readFile(file, 'utf8').catch(() => 'null'));
+      if (!atual) return null;
+      if (body.revisao && +body.revisao !== atual.revisao) return { conflito: atual.revisao };
+      await fsp.writeFile(path.join(RDIR, `${id}.r${atual.revisao}.json.bak`), JSON.stringify(atual, null, 2));
+      const san = sanitizeFolha(body);
+      const novo = { ...atual, ...san, grade: san.grade || atual.grade, id, criadoEm: atual.criadoEm, criadoPorIp: atual.criadoPorIp, revisao: atual.revisao + 1, atualizadoEm: new Date().toISOString() };
+      await writeJsonAtomic(file, novo);
+      return novo;
+    });
+    if (!out) return json(res, 404, { erro: 'Folha não encontrada.' });
+    if (out.conflito) return json(res, 409, { erro: `A folha foi alterada em outro lugar (revisão ${out.conflito}). Recarregue antes de salvar.` });
+    await audit({ acao: 'folha_recebimento_atualizada', folha: id, revisao: out.revisao, ip });
+    return json(res, 200, out);
+  }
+  if (req.method === 'DELETE') {
+    // não apaga: renomeia (rastro de auditoria), igual aos anexos
+    const ok = await withLock('receb:' + id, async () => fsp.rename(file, file + '.removido').then(() => true, () => false));
+    if (!ok) return json(res, 404, { erro: 'Folha não encontrada.' });
+    await audit({ acao: 'folha_recebimento_removida', folha: id, ip });
+    return json(res, 200, { ok: true });
   }
   json(res, 405, { erro: 'Método não permitido.' });
 }
@@ -771,6 +867,7 @@ async function ticketRoute(req, res, ticket, acao) {
   if (!t) { req.resume(); return json(res, 404, { erro: 'Pedido de assinatura expirado ou inválido. Gere de novo no sistema.' }); }
   const L = await lerLaudo(t.id);
   const prep = path.join(LDIR, `${t.id}.preparado.pdf`);
+  if (!L || !fs.existsSync(prep)) { req.resume(); return json(res, 404, { erro: 'Pedido de assinatura expirado ou inválido. Gere de novo no sistema.' }); }
   const M = L && L.modeloSnap ? L.modeloSnap : { titulo: 'Laudo Técnico', rotuloNumero: 'Laudo nº' };
   if (req.method === 'GET' && acao === 'pdf') {
     const st = await fsp.stat(prep);
@@ -865,11 +962,20 @@ async function pacoteColeta(req, res, url) {
     const diag = url.searchParams.get('tipo') === 'diagnostico';
     const cfg = `SERVIDOR=${baseUrl(req)}\r\nTOKEN=${UPLOAD_TOKEN}\r\n`;
     const arquivos = [];
-    const lista = diag ? [['diagnostico.bat'], ['diagnostico.ps1'], ['LEIA-ME-diagnostico.txt', 'LEIA-ME.txt']]
+    const lista = diag ? [['diagnostico.bat'], ['diagnostico.ps1'], ['baixar-sensores.ps1'], ['LEIA-ME-diagnostico.txt', 'LEIA-ME.txt']]
                        : [['diag-hardware.bat'], ['diag-hardware.ps1'], ['LEIA-ME.txt']];
     for (const [n, nomeZip] of lista) {
       const f = path.join(SCRIPTS_DIR, n);
       if (fs.existsSync(f)) arquivos.push({ nome: nomeZip || n, dados: await fsp.readFile(f) });
+    }
+    // LibreHardwareMonitor (tensões, ventoinhas, temperaturas): vai junto se estiver em web/coleta/sensores
+    const sens = path.join(SCRIPTS_DIR, 'sensores');
+    if (diag && fs.existsSync(sens)) {
+      for (const e of await fsp.readdir(sens, { recursive: true, withFileTypes: true })) {
+        if (!e.isFile()) continue;
+        const f = path.join(e.parentPath || e.path, e.name);
+        arquivos.push({ nome: 'sensores/' + path.relative(sens, f).split(path.sep).join('/'), dados: await fsp.readFile(f) });
+      }
     }
     arquivos.push({ nome: 'diag-servidor.cfg', dados: Buffer.from(cfg) });
     const zip = criarZip(arquivos);
@@ -883,7 +989,8 @@ async function pacoteColeta(req, res, url) {
 
 // ------------------------------------------------------------------ estaticos
 async function serveStatic(req, res, url) {
-  let rel = decodeURIComponent(url.pathname);
+  let rel;
+  try { rel = decodeURIComponent(url.pathname); } catch { res.writeHead(400, SEC); return res.end(); }
   if (rel === '/' || rel === '') rel = '/index.html';
   if (rel.endsWith('/')) rel += 'index.html';
   const file = path.normalize(path.join(WEB, rel));
@@ -916,6 +1023,10 @@ const server = http.createServer(async (req, res) => {
     if (ma) return await anexoRoute(req, res, url, owner('coleta', ma[1]), ma[2]);
     const la = p.match(/^\/api\/laudos\/([^/]+)\/anexos(?:\/([^/]+))?$/);
     if (la) return await anexoRoute(req, res, url, owner('laudo', la[1]), la[2]);
+    const ra = p.match(/^\/api\/recebimentos\/([^/]+)\/anexos(?:\/([^/]+))?$/);
+    if (ra) return await anexoRoute(req, res, url, owner('receb', ra[1]), ra[2]);
+    const rr = p.match(/^\/api\/recebimentos(?:\/([^/]+))?$/);
+    if (rr) return await recebRoute(req, res, url, rr[1]);
     const mm = p.match(/^\/api\/modelos(?:\/([^/]+))?(?:\/(restaurar))?$/);
     if (mm) return await modeloRoute(req, res, url, mm[1], mm[2]);
     const la2 = p.match(/^\/api\/laudos\/([^/]+)\/(preparar|assinado|digitalizado)$/);

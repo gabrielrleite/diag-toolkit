@@ -1,2 +1,5 @@
 pdfmake 0.2.15 MIT
 pdf-lib 1.17.1 MIT
+tesseract.js 5.1.1 Apache-2.0 (tesseract/)
+tesseract.js-core 5.1.1 Apache-2.0 (tesseract/core, só variantes LSTM)
+@tesseract.js-data/por 1.0.0 4.0.0_best_int Apache-2.0 (tesseract/lang)
