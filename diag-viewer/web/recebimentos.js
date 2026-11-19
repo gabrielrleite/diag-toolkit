@@ -126,24 +126,60 @@ async function renderImportar() {
     <div class="head-row"><div><a href="#receb" class="btn small ghost">← Recebimentos</a> <b class="ld-title">Importar folhas</b></div></div>
     <div class="drop" id="rbDrop" style="padding:28px">
       <h1 style="font-size:18px">Escolha as fotos ou digitalizações das folhas</h1>
-      <p>JPG, PNG ou WEBP (pode arrastar para cá). Pode escolher várias: cada folha é conferida antes de salvar.</p>
-      <label class="btn">Escolher imagens<input type="file" id="rbFiles" accept="image/jpeg,image/png,image/webp" multiple hidden></label>
+      <p>JPG, PNG, WEBP ou PDF (pode arrastar para cá). Pode escolher vários; cada página do PDF vira uma folha. Cada folha é conferida antes de salvar.</p>
+      <label class="btn">Escolher arquivos<input type="file" id="rbFiles" accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" multiple hidden></label>
       <p class="muted" style="margin-top:12px">Dicas: folha inteira na foto, sem cortar a tabela; luz uniforme; caneta escura.
       O OCR acerta bem letra de forma e números; letra cursiva quase sempre precisa de correção manual.
       A leitura acontece neste navegador.</p>
     </div></div>`;
-  const pegar = files => {
-    RB.imp.fila = [...files].filter(f => /^image\/(jpeg|png|webp)$/.test(f.type));
-    if (!RB.imp.fila.length) return alert('Escolha imagens JPG, PNG ou WEBP.');
-    RB.imp.i = 0; prepararFolha();
+  // cada item da fila é uma folha: uma imagem ou uma página de PDF
+  const pegar = async files => {
+    const fila = [];
+    for (const f of files) {
+      if (ehPdf(f)) {
+        $('#rbDrop h1').textContent = `Abrindo ${f.name}…`;
+        try {
+          const doc = await abrirPdf(f);
+          for (let p = 1; p <= doc.numPages; p++) fila.push({ file: f, pagina: p, paginas: doc.numPages });
+        } catch (e) { alert(`Não foi possível abrir o PDF ${f.name}: ${e.message || e}`); }
+      } else if (/^image\/(jpeg|png|webp)$/.test(f.type)) fila.push({ file: f, pagina: 0, paginas: 0 });
+    }
+    if (!fila.length) { $('#rbDrop h1').textContent = 'Escolha as fotos ou digitalizações das folhas'; return alert('Escolha imagens JPG, PNG, WEBP ou PDF.'); }
+    RB.imp.fila = fila; RB.imp.i = 0; prepararFolha();
   };
   $('#rbFiles').addEventListener('change', e => pegar(e.target.files));
   RB.pegar = pegar;
   ocrWorker().catch(() => {}); // já começa a carregar o OCR
 }
 
-async function carregarImagem(file) {
-  const url = URL.createObjectURL(file);
+// ---------------------------------------------------------------- PDF (pdf.js, carregado sob demanda)
+const ehPdf = f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+const nomeItem = it => it.file.name + (it.paginas > 1 ? ` · pág. ${it.pagina} de ${it.paginas}` : '');
+const pdfDocs = new WeakMap();
+async function abrirPdf(file) {
+  if (pdfDocs.has(file)) return pdfDocs.get(file);
+  if (typeof pdfjsLib === 'undefined') {
+    await carregarScript('vendor/pdfjs/pdf.min.js');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js';
+  }
+  const p = pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise;
+  pdfDocs.set(file, p);
+  return p;
+}
+// renderiza a página com ~3000 px no lado maior (digitalizações costumam vir a 150–300 dpi)
+async function renderizarPagina(file, n) {
+  const doc = await abrirPdf(file), pg = await doc.getPage(n);
+  const v1 = pg.getViewport({ scale: 1 });
+  const vp = pg.getViewport({ scale: Math.min(6, 3000 / Math.max(v1.width, v1.height)) });
+  const c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+  return c;
+}
+
+async function carregarImagem(it) {
+  if (it.pagina) return renderizarPagina(it.file, it.pagina);
+  const url = URL.createObjectURL(it.file);
   try {
     const im = new Image(); im.src = url; await im.decode();
     const k = Math.min(1, 3600 / Math.max(im.naturalWidth, im.naturalHeight));
@@ -168,16 +204,16 @@ function escolherGiro(img, cantos) {
 }
 
 async function prepararFolha() {
-  const imp = RB.imp, el = $('#mod-receb'), file = imp.fila[imp.i];
-  el.innerHTML = `<div class="panel">Abrindo ${esc(file.name)}...</div>`;
+  const imp = RB.imp, el = $('#mod-receb'), it = imp.fila[imp.i], file = it.file;
+  el.innerHTML = `<div class="panel">Abrindo ${esc(nomeItem(it))}...</div>`;
   let canvas;
-  try { canvas = await carregarImagem(file); } catch { el.innerHTML = '<div class="panel"><p class="err">Não foi possível abrir a imagem.</p><a class="btn ghost" href="#receb">Voltar</a></div>'; return; }
+  try { canvas = await carregarImagem(it); } catch { el.innerHTML = `<div class="panel"><p class="err">Não foi possível abrir ${esc(nomeItem(it))}.</p>${imp.i + 1 < imp.fila.length ? '<button class="btn" id="rbPular2">Próxima folha</button> ' : ''}<a class="btn ghost" href="#receb">Voltar</a></div>`; if ($('#rbPular2')) $('#rbPular2').addEventListener('click', proximaFolha); return; }
   await new Promise(r => setTimeout(r, 20));
   const img = RecebOCR.cinza(canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
   const auto = RecebOCR.detectarCantos(img);
   const m = 0.06;
   const cantos = auto || [[img.w * m, img.h * m], [img.w * (1 - m), img.h * m], [img.w * (1 - m), img.h * (1 - m)], [img.w * m, img.h * (1 - m)]];
-  imp.atual = { file, canvas, img, cantos, auto: !!auto, giro: auto ? escolherGiro(img, cantos) : 0 };
+  imp.atual = { file, pagina: it.pagina, paginas: it.paginas, nome: nomeItem(it), canvas, img, cantos, auto: !!auto, giro: auto ? escolherGiro(img, cantos) : 0 };
   renderAjuste();
 }
 
@@ -185,7 +221,7 @@ function renderAjuste() {
   const imp = RB.imp, A = imp.atual, el = $('#mod-receb');
   el.innerHTML = `<div class="panel">
     <div class="ld-bar"><div><a href="#receb" class="btn small ghost">← Recebimentos</a>
-      <b class="ld-title">Folha ${imp.i + 1} de ${imp.fila.length}</b><small>${esc(A.file.name)}</small></div>
+      <b class="ld-title">Folha ${imp.i + 1} de ${imp.fila.length}</b><small>${esc(A.nome)}</small></div>
       <div class="filters" style="margin:0">
         ${imp.fila.length > 1 ? '<button class="btn ghost small" id="rbPular">Pular esta folha</button>' : ''}
         <button class="btn ghost" id="rbGirar" title="Gira a orientação da tabela em 90°">Girar 90°</button>
@@ -377,11 +413,11 @@ function montarRevisao(lidos) {
   }
   const datas = linhas.map(l => l.dataIso).filter(Boolean).sort();
   const folha = {
-    titulo: A.file.name.replace(/\.[^.]+$/, ''), obs: '', dataFolha: datas.length ? datas[datas.length - 1] : '',
+    titulo: A.file.name.replace(/\.[^.]+$/, '') + (A.paginas > 1 ? ` – pág. ${A.pagina}` : ''), obs: '', dataFolha: datas.length ? datas[datas.length - 1] : '',
     linhas, grade: { w: R.w, h: R.h, linhas: G.rows.slice(r0), colunas: G.cols },
   };
   RB.cur = folha; RB.dirty = true;
-  renderFolhaEditor(folha, imgs, { nova: true, nLinhas: G.rows.length - 1 - r0, fotoOriginal: URL.createObjectURL(A.file) });
+  renderFolhaEditor(folha, imgs, { nova: true, nLinhas: G.rows.length - 1 - r0, fotoOriginal: URL.createObjectURL(A.file) + (A.pagina ? '#page=' + A.pagina : '') });
 }
 
 // ================================================================== editor (nova folha ou existente)
@@ -394,7 +430,7 @@ function renderFolhaEditor(F, imgs, opt = {}) {
         <b class="ld-title">${opt.nova ? `Conferir folha${imp && imp.fila.length > 1 ? ` ${imp.i + 1} de ${imp.fila.length}` : ''}` : esc(F.titulo || F.id)}</b>
         ${opt.nova ? '<span class="badge warn">ainda não salva</span>' : `<small class="mono">${esc(F.id)} · rev. ${F.revisao}</small>`}</div>
       <div class="filters" style="margin:0">
-        ${opt.nova ? '<button class="btn ghost" id="rbVoltarAj">Ajustar cantos</button>' : `<button class="btn ghost small" id="rbExcluir">Excluir folha</button>`}${opt.fotoOriginal ? `<a class="btn ghost small" href="${opt.fotoOriginal}" target="_blank" rel="noopener">Foto original</a>` : ''}
+        ${opt.nova ? '<button class="btn ghost" id="rbVoltarAj">Ajustar cantos</button>' : `<button class="btn ghost small" id="rbExcluir">Excluir folha</button>`}${opt.fotoOriginal ? `<a class="btn ghost small" href="${opt.fotoOriginal}" target="_blank" rel="noopener">${/#page=/.test(opt.fotoOriginal) ? 'PDF original' : 'Foto original'}</a>` : ''}
         <button class="btn ghost" id="rbTodas">Marcar todas como conferidas</button>
         <button class="btn" id="rbSalvar">${opt.nova ? 'Salvar folha' : 'Salvar'}</button></div>
     </div>
@@ -493,7 +529,10 @@ async function salvarNova(F) {
   const ret = recorte(A.R, { x: 0, y: 0, w: A.R.w, h: A.R.h }, 0, false);
   const blobRet = await new Promise(ok => ret.toBlob(ok, 'image/jpeg', 0.82));
   const okRet = await enviarAnexo(salvo.id, blobRet, 'folha-retificada.jpg', 'Folha retificada');
-  const okOrig = A.file.size <= 25 * 1048576 ? await enviarAnexo(salvo.id, A.file, A.file.name, 'Foto original') : false;
+  // PDF: guarda o arquivo inteiro e a página da folha na legenda
+  const legOrig = A.pagina ? `Arquivo original (pág. ${A.pagina}${A.paginas > 1 ? ` de ${A.paginas}` : ''})` : 'Foto original';
+  const arq = A.pagina && !A.file.type ? new Blob([A.file], { type: 'application/pdf' }) : A.file;
+  const okOrig = A.file.size <= 25 * 1048576 ? await enviarAnexo(salvo.id, arq, A.file.name, legOrig) : false;
   if (!okRet || !okOrig) alert('A folha foi salva, mas ' + (!okRet ? 'a imagem retificada' : 'a foto original') + ' não foi enviada (tamanho ou conexão).');
   RB.dirty = false; RB.cur = null;
   if (RB.imp && RB.imp.i + 1 < RB.imp.fila.length) proximaFolha();
@@ -519,7 +558,8 @@ async function abrirFolha(id, linha = 0) {
   RB.cur = F; RB.dirty = false;
   const anx = await api(`api/recebimentos/${F.id}/anexos`).then(x => x.ok ? x.json() : []).catch(() => []);
   const url = a => `api/recebimentos/${F.id}/anexos/${a.aid}${srv.token ? '?token=' + encodeURIComponent(srv.token) : ''}`;
-  const ret = anx.find(a => a.legenda === 'Folha retificada'), orig = anx.find(a => a.legenda === 'Foto original');
+  const ret = anx.find(a => a.legenda === 'Folha retificada'), orig = anx.find(a => /^(Foto|Arquivo) original/.test(a.legenda));
+  const pag = orig && (orig.legenda.match(/pág\. (\d+)/) || [])[1];
   const imgs = {};
   if (ret && F.grade && F.grade.linhas.length > 1) {
     try {
@@ -535,7 +575,7 @@ async function abrirFolha(id, linha = 0) {
       URL.revokeObjectURL(u);
     } catch { /* sem recortes */ }
   }
-  renderFolhaEditor(F, imgs, { fotoOriginal: orig ? url(orig) : '', linha });
+  renderFolhaEditor(F, imgs, { fotoOriginal: orig ? url(orig) + (pag ? '#page=' + pag : '') : '', linha });
 }
 
 // arrastar imagens para a tela de importação (chamado pelo tratador de "soltar" do app.js)
