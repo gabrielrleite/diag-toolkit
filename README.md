@@ -38,7 +38,7 @@ Cada execução gera um `.zip` com hashes e pode enviá-lo ao servidor (`diag-se
   - digital, com o certificado instalado no Windows (A1/A3), via agente local (`web/agente/`);
   - física, com upload da via digitalizada.
 - **Equipamentos**: histórico por patrimônio.
-- **Recebimentos**: importação de folhas de recebimento assinadas (várias entregas por folha) com OCR no navegador, conferência linha a linha, busca e exportação CSV.
+- **Recebimentos**: importação de folhas de recebimento assinadas (várias entregas por folha) com OCR no navegador de local, SELB e data (CPF e nome ficam na foto da folha), conferência linha a linha, busca e exportação CSV.
 - **Downloads** (`/download/`): pacotes dos scripts já configurados para o servidor.
 
 ## Execução rápida

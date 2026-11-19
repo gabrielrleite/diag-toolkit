@@ -16,10 +16,11 @@ Três módulos:
   - *Baixar PDF*: PDF oficial sem assinatura (rascunhos saem com marca d'água).
 - **Recebimentos** (folhas de recebimento assinadas, com OCR): importa fotos ou digitalizações (JPG/PNG/WEBP, várias de uma vez) da folha com colunas SELB, DATA, LOCAL, CPF e NOME (várias entregas por folha).
   - O navegador acha a tabela sozinho, corrige perspectiva e rotação (foto de lado ou de cabeça para baixo) e mostra a grade detectada; os 4 cantos podem ser arrastados e há *Girar 90°*.
-  - Só as células com escrita vão para o OCR ([Tesseract.js](https://github.com/naptha/tesseract.js), português, embutido em `web/vendor/tesseract`, sem internet). A imagem é lida no navegador; vai ao servidor só ao salvar.
-  - Conferência linha a linha com o recorte da folha acima dos campos. CPF com dígito verificador errado, data inválida e leitura com confiança < 60% ficam em vermelho. Cada linha tem *conferida*.
-  - Controle: busca por nome, CPF, SELB, local ou data em todas as folhas, filtro de não conferidos, aviso de SELB repetido e exportação CSV. Guarda a foto original e a folha retificada (anexos com SHA-256), revisões e auditoria.
-  - Letra de forma e números costumam ser lidos bem; letra cursiva quase sempre precisa de correção manual. Outro layout de folha: ajuste `FOLHA_MODELO` em `web/recebimentos.js`.
+  - Na tela aparecem só **Local, SELB e Data**: o OCR ([Tesseract.js](https://github.com/naptha/tesseract.js), português, embutido em `web/vendor/tesseract`, sem internet) lê essas colunas nas células com escrita, e tudo pode ser corrigido à mão. A imagem é lida no navegador; vai ao servidor só ao salvar.
+  - CPF e nome/assinatura **não são digitados**: ao abrir o item, cada linha mostra a foto da linha na folha (clique para ampliar) e há o botão *Foto original*. Linha preenchida só com nome/assinatura também é registrada.
+  - Data inválida e leitura com confiança < 60% ficam em vermelho. Cada linha tem *conferida*.
+  - Controle: busca por local, SELB ou data em todas as folhas (clicar abre a folha na linha), filtro de não conferidos, aviso de SELB repetido e exportação CSV. Guarda a foto original e a folha retificada (anexos com SHA-256), revisões e auditoria.
+  - Letra de forma e números costumam ser lidos bem; letra cursiva quase sempre precisa de correção manual. Outro layout de folha ou outras colunas digitadas: ajuste `FOLHA_MODELO` (`ler: true/false`) em `web/recebimentos.js`.
 - **Modelos de laudo** (Laudos › Modelos): título do documento, seções exibidas e seus nomes, testes padrão, conclusões permitidas, textos pré-preenchidos com {patrimonio}/{computador}/{setor}/{local}/{solicitante}/{chamado}/{data}, campos extras (texto, texto longo, data, lista; obrigatórios ou não), texto de encaminhamento e assinaturas adicionais. Vêm 5 modelos padrão (completo, baixa patrimonial, garantia, registro de atendimento, requisição de peças), que podem ser editados, desativados ou restaurados; novos modelos podem ser criados ou duplicados. Cada laudo guarda uma cópia do modelo usado.
 
 Servidor web que recebe as coletas do `diag-hardware.ps1` e ajuda a analisar e gerar o relatório técnico.

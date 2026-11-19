@@ -7,30 +7,33 @@
 */
 
 // Modelo da folha: colunas na ordem impressa. "peso" = largura relativa (ajuda a saber se a foto está de cabeça para baixo).
+// "ler": coluna digitada (OCR + ajuste manual). As demais (CPF, nome/assinatura) ficam só na imagem da folha.
 const FOLHA_MODELO = {
   colunas: [
-    { k: 'selb', rotulo: 'SELB', peso: 198, wl: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/. ' },
-    { k: 'data', rotulo: 'Data', peso: 254, wl: '0123456789/.-' },
-    { k: 'local', rotulo: 'Local', peso: 786, wl: '' },
-    { k: 'cpf', rotulo: 'CPF', peso: 340, wl: '0123456789.-' },
-    { k: 'nome', rotulo: 'Nome', peso: 616, wl: '' },
+    { k: 'selb', rotulo: 'SELB', peso: 198, ler: true, wl: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/. ' },
+    { k: 'data', rotulo: 'Data', peso: 254, ler: true, wl: '0123456789/.-' },
+    { k: 'local', rotulo: 'Local', peso: 786, ler: true, wl: '' },
+    { k: 'cpf', rotulo: 'CPF', peso: 340, ler: false },
+    { k: 'nome', rotulo: 'Nome', peso: 616, ler: false },
   ],
   cabecalho: true, // primeira linha da grade é o cabeçalho
 };
 const RB = { folhas: [], q: '', cur: null, dirty: false, imp: null, worker: null, carregandoOcr: null };
 const COLS = FOLHA_MODELO.colunas;
-const cpfOk = v => RecebOCR.limparCpf(v).ok;
+// o que aparece na tela e é digitado, na ordem de exibição
+const CAMPOS = ['local', 'selb', 'data'].map(k => COLS.find(c => c.k === k)).filter(c => c && c.ler);
+const NA_IMAGEM = COLS.filter(c => !c.ler).map(c => c.rotulo).join(' e ');
 const dataOk = v => !v || RecebOCR.limparData(v).ok;
 
 // ================================================================== lista / controle
 async function renderReceb(arg) {
   const el = $('#mod-receb');
-  if (RB.dirty && RB.cur && arg !== RB.cur.id && !confirm('Há alterações não salvas na folha. Sair mesmo assim?')) {
+  if (RB.dirty && RB.cur && (arg || '').split('~')[0] !== RB.cur.id && !confirm('Há alterações não salvas na folha. Sair mesmo assim?')) {
     history.replaceState(null, '', '#receb/' + (RB.cur.id || 'importar')); return;
   }
   RB.dirty = false; RB.cur = null;
   if (arg === 'importar') return renderImportar();
-  if (arg) return abrirFolha(arg);
+  if (arg) { const [fid, n] = arg.split('~'); return abrirFolha(fid, +n || 0); }
   RB.imp = null;
   el.innerHTML = '<div class="panel">Carregando...</div>';
   if (!(await needServer(el))) return;
@@ -58,22 +61,21 @@ async function renderReceb(arg) {
     </div>
     ${regs.length ? `<div class="panel">
       <div class="head-row"><h2>Recebimentos</h2><button class="btn ghost small" id="rbCsv">Exportar CSV</button></div>
-      <div class="filters"><label>Buscar <input type="search" id="rbQ" value="${esc(RB.q)}" placeholder="nome, CPF, SELB, local, data..." style="min-width:260px"></label>
+      <div class="filters"><label>Buscar <input type="search" id="rbQ" value="${esc(RB.q)}" placeholder="SELB, local, data..." style="min-width:260px"></label>
         <label class="chk"><input type="checkbox" id="rbPend"> só não conferidos</label><span class="muted" id="rbN"></span></div>
       <div id="rbRegs"></div></div>` : ''}`;
   el.querySelectorAll('[data-folha]').forEach(tr => tr.addEventListener('click', () => { location.hash = 'receb/' + tr.dataset.folha; }));
   if (!regs.length) return;
   let filtrados = regs;
   const draw = () => {
-    const q = RB.q.trim().toLowerCase(), qd = q.replace(/\D/g, ''), so = $('#rbPend').checked;
-    filtrados = regs.filter(l => (!so || !l.revisado) && (!q || [l.selb, l.data, l.local, l.cpf, l.nome, l.folha.titulo].join(' ').toLowerCase().includes(q) || (qd.length >= 3 && l.cpf.replace(/\D/g, '').includes(qd))));
+    const q = RB.q.trim().toLowerCase(), so = $('#rbPend').checked;
+    filtrados = regs.filter(l => (!so || !l.revisado) && (!q || [l.selb, l.data, l.local, l.folha.titulo].join(' ').toLowerCase().includes(q)));
     $('#rbN').textContent = `${filtrados.length} de ${regs.length}`;
-    $('#rbRegs').innerHTML = `<div class="tablewrap"><table class="clickable"><thead><tr>${COLS.map(c => `<th class="nosort">${esc(c.rotulo)}</th>`).join('')}<th class="nosort">Folha</th></tr></thead><tbody>
-      ${filtrados.slice(0, 1000).map(l => `<tr data-folha="${esc(l.folha.id)}">
+    $('#rbRegs').innerHTML = `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Local</th><th class="nosort">SELB</th><th class="nosort">Data</th><th class="nosort">Folha</th></tr></thead><tbody>
+      ${filtrados.slice(0, 1000).map(l => `<tr data-folha="${esc(l.folha.id)}~${l.n}">
+        <td>${esc(l.local || '—')}</td>
         <td>${esc(l.selb || '—')}${l.selb && porSelb.get(l.selb.toUpperCase()) > 1 ? ' <span class="badge warn" title="Mesmo SELB em mais de uma linha">repetido</span>' : ''}</td>
-        <td class="t">${esc(l.data || '—')}</td><td>${esc(l.local || '—')}</td>
-        <td class="t">${esc(l.cpf || '—')}${l.cpf && !cpfOk(l.cpf) ? ' <span class="badge bad" title="Dígito verificador não confere">CPF?</span>' : ''}</td>
-        <td>${esc(l.nome || '—')}</td>
+        <td class="t">${esc(l.data || '—')}</td>
         <td><small>${esc(l.folha.titulo || l.folha.id)} · linha ${l.n}</small>${l.revisado ? '' : ' <span class="badge warn">conferir</span>'}</td></tr>`).join('')}
       </tbody></table></div>${filtrados.length > 1000 ? '<p class="muted">Mostrando os primeiros 1000. Refine a busca.</p>' : ''}`;
     $('#rbRegs').querySelectorAll('[data-folha]').forEach(tr => tr.addEventListener('click', () => { location.hash = 'receb/' + tr.dataset.folha; }));
@@ -82,8 +84,8 @@ async function renderReceb(arg) {
   $('#rbPend').addEventListener('change', draw);
   $('#rbCsv').addEventListener('click', () => {
     const cel = v => /[";\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
-    const linhas = [['SELB', 'Data', 'Local', 'CPF', 'Nome', 'Folha', 'Linha', 'Conferido'].join(';'),
-      ...filtrados.map(l => [l.selb, l.data, l.local, l.cpf, l.nome, l.folha.titulo || l.folha.id, l.n, l.revisado ? 'sim' : 'não'].map(cel).join(';'))];
+    const linhas = [['Local', 'SELB', 'Data', 'Folha', 'Linha', 'Conferido'].join(';'),
+      ...filtrados.map(l => [l.local, l.selb, l.data, l.folha.titulo || l.folha.id, l.n, l.revisado ? 'sim' : 'não'].map(cel).join(';'))];
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob(['﻿' + linhas.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
     a.download = `recebimentos-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
@@ -300,11 +302,15 @@ async function lerFolha() {
   const A = RB.imp.atual, R = A.R, G = A.G, el = $('#mod-receb');
   const nCol = Math.min(COLS.length, G.cols.length - 1), r0 = FOLHA_MODELO.cabecalho ? 1 : 0;
   // células a ler, agrupadas por coluna (troca os parâmetros do OCR uma vez por coluna)
-  const tarefas = [];
+  // linha com escrita em qualquer coluna (inclusive só nome/assinatura) entra na conferência
+  const tarefas = [], comEscrita = new Set();
   for (let c = 0; c < nCol; c++) for (let r = r0; r + 1 < G.rows.length; r++) {
     const q = RecebOCR.celula(G, r, c), t = RecebOCR.tinta(G, R, q);
-    if (RecebOCR.temConteudo(t)) tarefas.push({ r, c, q, t });
+    if (!RecebOCR.temConteudo(t)) continue;
+    comEscrita.add(r);
+    if (COLS[c].ler) tarefas.push({ r, c, q, t });
   }
+  RB.imp.atual.comEscrita = comEscrita;
   el.innerHTML = `<div class="panel"><h2>Lendo a folha…</h2>
     <p id="rbSt" class="muted">Carregando o OCR (na primeira vez pode levar alguns segundos)…</p>
     <div class="vol-bar" style="max-width:520px"><div id="rbBar" style="width:0%"></div></div>
@@ -317,6 +323,7 @@ async function lerFolha() {
   } catch (e) {
     el.innerHTML = `<div class="panel"><p class="err">Não foi possível iniciar o OCR: ${esc(e.message)}</p><p>Você ainda pode digitar os dados manualmente.</p><button class="btn" id="rbMan">Preencher manualmente</button></div>`;
     $('#rbMan').addEventListener('click', () => montarRevisao({}));
+    if (!tarefas.length) return;
     return;
   }
   const lidos = {};
@@ -349,16 +356,15 @@ function montarRevisao(lidos) {
   const anoPadrao = new Date().getFullYear();
   const linhas = [];
   for (let r = r0; r + 1 < G.rows.length; r++) {
-    const L = lidos[r];
-    if (!L) continue;
-    const l = { n: r - r0 + 1, revisado: false, conf: {}, dataIso: '' };
-    for (const c of COLS) {
+    const L = lidos[r] || {};
+    if (!lidos[r] && !(A.comEscrita && A.comEscrita.has(r))) continue;
+    const l = { n: r - r0 + 1, revisado: false, escrita: true, conf: {}, dataIso: '' };
+    for (const c of CAMPOS) {
       const v = L[c.k];
       l[c.k] = '';
       if (!v) continue;
       l.conf[c.k] = v.conf;
-      if (c.k === 'cpf') l.cpf = RecebOCR.limparCpf(v.texto).valor;
-      else if (c.k === 'data') { const d = RecebOCR.limparData(v.texto, anoPadrao); l.data = d.valor; l.dataIso = d.iso; }
+      if (c.k === 'data') { const d = RecebOCR.limparData(v.texto, anoPadrao); l.data = d.valor; l.dataIso = d.iso; }
       else l[c.k] = RecebOCR.limparTexto(v.texto).toUpperCase();
     }
     linhas.push(l);
@@ -375,7 +381,7 @@ function montarRevisao(lidos) {
     linhas, grade: { w: R.w, h: R.h, linhas: G.rows.slice(r0), colunas: G.cols },
   };
   RB.cur = folha; RB.dirty = true;
-  renderFolhaEditor(folha, imgs, { nova: true, nLinhas: G.rows.length - 1 - r0 });
+  renderFolhaEditor(folha, imgs, { nova: true, nLinhas: G.rows.length - 1 - r0, fotoOriginal: URL.createObjectURL(A.file) });
 }
 
 // ================================================================== editor (nova folha ou existente)
@@ -388,7 +394,7 @@ function renderFolhaEditor(F, imgs, opt = {}) {
         <b class="ld-title">${opt.nova ? `Conferir folha${imp && imp.fila.length > 1 ? ` ${imp.i + 1} de ${imp.fila.length}` : ''}` : esc(F.titulo || F.id)}</b>
         ${opt.nova ? '<span class="badge warn">ainda não salva</span>' : `<small class="mono">${esc(F.id)} · rev. ${F.revisao}</small>`}</div>
       <div class="filters" style="margin:0">
-        ${opt.nova ? '<button class="btn ghost" id="rbVoltarAj">Ajustar cantos</button>' : `<button class="btn ghost small" id="rbExcluir">Excluir folha</button>${opt.original ? `<a class="btn ghost small" href="${opt.original}" target="_blank" rel="noopener">Foto original</a>` : ''}`}
+        ${opt.nova ? '<button class="btn ghost" id="rbVoltarAj">Ajustar cantos</button>' : `<button class="btn ghost small" id="rbExcluir">Excluir folha</button>`}${opt.fotoOriginal ? `<a class="btn ghost small" href="${opt.fotoOriginal}" target="_blank" rel="noopener">Foto original</a>` : ''}
         <button class="btn ghost" id="rbTodas">Marcar todas como conferidas</button>
         <button class="btn" id="rbSalvar">${opt.nova ? 'Salvar folha' : 'Salvar'}</button></div>
     </div>
@@ -398,8 +404,8 @@ function renderFolhaEditor(F, imgs, opt = {}) {
         <label>Data da folha <input type="date" id="rbData" value="${esc(F.dataFolha)}"></label>
         <label class="full">Observações <textarea id="rbObs" rows="2" maxlength="2000">${esc(F.obs)}</textarea></label>
       </div>
-      ${opt.nova ? `<p class="note info">O OCR leu ${F.linhas.length} linha(s) com escrita de ${opt.nLinhas}. Confira cada linha com o recorte da folha acima dela e corrija o que for preciso.
-        Campos em <span class="bad-txt">vermelho</span> têm baixa confiança ou formato inválido (ex.: CPF com dígito verificador errado).</p>` : ''}
+      ${opt.nova ? `<p class="note info">${F.linhas.length} linha(s) com escrita de ${opt.nLinhas}. O OCR leu ${CAMPOS.map(c => c.rotulo).join(', ')}: confira com a foto da linha e corrija o que for preciso.
+        ${esc(NA_IMAGEM)} não são digitados: ficam na foto da folha. Campos em <span class="bad-txt">vermelho</span> têm baixa confiança ou formato inválido.</p>` : ''}
     </div>
     <div class="panel"><div class="head-row"><h2>Linhas</h2><button class="btn ghost small" id="rbAdd">Adicionar linha</button></div>
       <div id="rbLinhas" class="rb-linhas"></div></div>`;
@@ -411,30 +417,32 @@ function renderFolhaEditor(F, imgs, opt = {}) {
     box.innerHTML = F.linhas.map((l, i) => {
       const campo = c => {
         const v = l[c.k] || '', conf = l.conf && l.conf[c.k];
-        const ruim = (c.k === 'cpf' && v && !cpfOk(v)) || (c.k === 'data' && v && !dataOk(v)) || (conf != null && conf < 60 && !l.revisado);
-        return `<label class="rb-c rb-${c.k}">${esc(c.rotulo)}${conf != null ? ` <small>${conf}%</small>` : ''}
-          <input data-i="${i}" data-k="${c.k}" value="${esc(v)}" class="${ruim ? 'rb-ruim' : ''}" maxlength="${c.k === 'local' || c.k === 'nome' ? 160 : 40}" ${c.k === 'cpf' ? 'inputmode="numeric"' : ''}></label>`;
+        const ruim = (c.k === 'data' && v && !dataOk(v)) || (conf != null && conf < 60 && !l.revisado);
+        return `<label class="rb-c rb-${c.k}">${esc(c.rotulo)}${conf != null ? ` <small title="confiança do OCR">${conf}%</small>` : ''}
+          <input data-i="${i}" data-k="${c.k}" value="${esc(v)}" class="${ruim ? 'rb-ruim' : ''}" maxlength="${c.k === 'local' ? 160 : 40}"></label>`;
       };
       const src = imgs && imgs[l.n];
-      return `<div class="rb-linha ${l.revisado ? 'ok' : ''}">
+      return `<div class="rb-linha ${l.revisado ? 'ok' : ''} ${opt.linha === l.n ? 'rb-alvo' : ''}" data-n="${l.n}">
         <div class="rb-lh"><b>Linha ${l.n}</b>
           <label class="chk"><input type="checkbox" data-rev="${i}" ${l.revisado ? 'checked' : ''}> conferida</label>
           <button class="btn ghost small" data-del="${i}">Remover</button></div>
-        ${src ? `<img class="rb-strip" src="${src}" alt="Recorte da linha ${l.n}">` : ''}
-        <div class="rb-campos">${COLS.map(campo).join('')}</div></div>`;
+        <div class="rb-campos">${CAMPOS.map(campo).join('')}</div>
+        ${src ? `<figure class="rb-fig"><img class="rb-strip" src="${src}" alt="Foto da linha ${l.n}" title="Clique para ampliar">
+          <figcaption>Foto da linha na folha${NA_IMAGEM ? ` (${esc(NA_IMAGEM)})` : ''} · clique para ampliar</figcaption></figure>` : ''}</div>`;
     }).join('');
     box.querySelectorAll('input[data-k]').forEach(inp => inp.addEventListener('input', () => {
       const l = F.linhas[+inp.dataset.i], k = inp.dataset.k;
       l[k] = inp.value; marcarSujo();
-      if (k === 'cpf') inp.classList.toggle('rb-ruim', !!inp.value && !cpfOk(inp.value));
+      if (l.conf) delete l.conf[k]; // corrigido à mão
+      inp.classList.remove('rb-ruim');
       if (k === 'data') { const d = RecebOCR.limparData(inp.value); l.dataIso = d.iso; inp.classList.toggle('rb-ruim', !!inp.value && !d.ok); }
-    }));
-    box.querySelectorAll('input[data-k="cpf"]').forEach(inp => inp.addEventListener('blur', () => {
-      const c = RecebOCR.limparCpf(inp.value); if (c.digitos.length === 11) { inp.value = c.valor; F.linhas[+inp.dataset.i].cpf = c.valor; }
     }));
     box.querySelectorAll('input[data-k="data"]').forEach(inp => inp.addEventListener('blur', () => {
       const d = RecebOCR.limparData(inp.value); if (d.ok) { inp.value = d.valor; F.linhas[+inp.dataset.i].data = d.valor; }
     }));
+    box.querySelectorAll('.rb-strip').forEach(im => im.addEventListener('click', () => im.closest('.rb-fig').classList.toggle('zoom')));
+    const alvo = opt.linha && box.querySelector(`.rb-linha[data-n="${opt.linha}"]`);
+    if (alvo) { alvo.scrollIntoView({ block: 'center' }); opt.linha = 0; }
     box.querySelectorAll('[data-rev]').forEach(cb => cb.addEventListener('change', () => {
       F.linhas[+cb.dataset.rev].revisado = cb.checked; cb.closest('.rb-linha').classList.toggle('ok', cb.checked); marcarSujo();
     }));
@@ -451,7 +459,7 @@ function renderFolhaEditor(F, imgs, opt = {}) {
     let n = 1; while (usados.has(n)) n++;
     const novo = window.prompt('Número da linha na folha:', String(n));
     if (novo === null) return;
-    F.linhas.push({ n: Math.max(1, parseInt(novo, 10) || n), revisado: false, conf: {}, selb: '', data: '', dataIso: '', local: '', cpf: '', nome: '' });
+    F.linhas.push({ n: Math.max(1, parseInt(novo, 10) || n), revisado: false, conf: {}, selb: '', data: '', dataIso: '', local: '', escrita: true });
     marcarSujo(); desenhar();
   });
   $('#rbTodas').addEventListener('click', () => { F.linhas.forEach(l => { l.revisado = true; }); marcarSujo(); desenhar(); });
@@ -501,7 +509,7 @@ async function salvarExistente(F) {
   const t = document.querySelector('#mod-receb .ld-bar small.mono'); if (t) t.textContent = `${F.id} · rev. ${F.revisao} · salvo`;
 }
 
-async function abrirFolha(id) {
+async function abrirFolha(id, linha = 0) {
   const el = $('#mod-receb');
   el.innerHTML = '<div class="panel">Carregando...</div>';
   if (!(await needServer(el))) return;
@@ -527,7 +535,7 @@ async function abrirFolha(id) {
       URL.revokeObjectURL(u);
     } catch { /* sem recortes */ }
   }
-  renderFolhaEditor(F, imgs, { original: orig ? url(orig) : '' });
+  renderFolhaEditor(F, imgs, { fotoOriginal: orig ? url(orig) : '', linha });
 }
 
 // arrastar imagens para a tela de importação (chamado pelo tratador de "soltar" do app.js)

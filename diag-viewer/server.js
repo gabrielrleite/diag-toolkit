@@ -415,12 +415,12 @@ function sanitizeFolha(b) {
   const F = {
     titulo: txt(b.titulo, 160), obs: txt(b.obs, 2000), dataFolha: /^\d{4}-\d{2}-\d{2}$/.test(b.dataFolha || '') ? b.dataFolha : '',
     linhas: (Array.isArray(b.linhas) ? b.linhas : []).slice(0, 300).map(l => {
-      const o = { n: Math.max(0, Math.min(999, parseInt(l && l.n, 10) || 0)), revisado: !!(l && l.revisado), conf: {} };
+      const o = { n: Math.max(0, Math.min(999, parseInt(l && l.n, 10) || 0)), revisado: !!(l && l.revisado), escrita: !!(l && l.escrita), conf: {} };
       for (const k of COLS_RECEB) o[k] = txt(l && l[k], k === 'local' || k === 'nome' ? 160 : 40).replace(/[\r\n\t]+/g, ' ').trim();
       o.dataIso = /^\d{4}-\d{2}-\d{2}$/.test((l && l.dataIso) || '') ? l.dataIso : '';
       for (const k of COLS_RECEB) { const c = l && l.conf && +l.conf[k]; if (c >= 0 && c <= 100) o.conf[k] = Math.round(c); }
       return o;
-    }).filter(l => COLS_RECEB.some(k => l[k])),
+    }).filter(l => l.escrita || COLS_RECEB.some(k => l[k])), // escrita: linha preenchida só com nome/assinatura também conta
     grade: null,
   };
   // posições das linhas na imagem retificada (para mostrar o recorte de cada linha)
