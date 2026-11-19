@@ -33,15 +33,16 @@ const para = t => esc(t || '').replace(/\n/g, '<br>');
 const dataBR = iso => { if (!iso) return '—'; const d = parseDate(iso.length === 10 ? iso + ' 00:00:00' : iso) || new Date(iso); return isNaN(d) ? esc(iso) : fmt(d).slice(0, 10); };
 
 // ================================================================== navegação
-const MODS = ['coletas', 'laudos', 'equip'];
+const MODS = ['coletas', 'laudos', 'equip', 'receb'];
 function showModule(mod) {
   if (!MODS.includes(mod)) mod = 'coletas';
   document.querySelectorAll('[data-mod]').forEach(b => b.classList.toggle('on', b.dataset.mod === mod));
   $('#mod-coletas').hidden = mod !== 'coletas';
   $('#mod-laudos').hidden = mod !== 'laudos';
   $('#mod-equip').hidden = mod !== 'equip';
+  $('#mod-receb').hidden = mod !== 'receb';
   $('#act-coletas').hidden = mod !== 'coletas';
-  document.title = { coletas: 'Remoção de hardware', laudos: 'Laudos de manutenção', equip: 'Equipamentos' }[mod] + ' · Visualizador';
+  document.title = { coletas: 'Remoção de hardware', laudos: 'Laudos de manutenção', equip: 'Equipamentos', receb: 'Recebimentos' }[mod] + ' · Visualizador';
 }
 
 async function route() {
@@ -63,6 +64,7 @@ async function route() {
     return renderLaudoList();
   }
   if (mod === 'equip') { showModule('equip'); return renderEquip(arg || ''); }
+  if (mod === 'receb') { showModule('receb'); return renderReceb(arg || ''); }
   showModule('coletas');
 }
 window.addEventListener('hashchange', route);

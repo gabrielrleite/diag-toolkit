@@ -693,6 +693,8 @@ window.addEventListener('dragleave', e => { e.preventDefault(); if (--dragDepth 
 window.addEventListener('dragover', e => e.preventDefault());
 window.addEventListener('drop', e => {
   e.preventDefault(); dragDepth = 0; $('#dropOverlay').hidden = true;
+  // na tela de importação de recebimentos, as imagens vão para lá
+  if (e.dataTransfer.files.length && typeof recebSoltar === 'function' && recebSoltar(e.dataTransfer.files)) return;
   if (e.dataTransfer.files.length) { if (typeof showModule === 'function') { history.replaceState(null, '', location.pathname); showModule('coletas'); } loadFiles(e.dataTransfer.files); }
 });
 
