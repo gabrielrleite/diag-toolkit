@@ -161,6 +161,7 @@ async function carregarVocab() {
   // locais cadastrados vêm primeiro (nome oficial), depois os já usados nas folhas
   const cad = await carregarLocais().catch(() => []);
   RB.vocab = { local: [...new Set([...cad.map(L => L.nome), ...conta('local')])], selb: conta('selb') };
+  RB.formatoSelb = RecebOCR.formatoSelb(RB.vocab.selb); // ex.: 1 letra + 4 dígitos
 }
 
 // ---------------------------------------------------------------- local pelo histórico do SELB
@@ -419,6 +420,82 @@ function recorte(R, q, alturaAlvo, contraste = true) {
   return c;
 }
 
+// ---------------------------------------------------------------- leitura de uma célula
+// Versões da imagem da célula para o OCR:
+//   cinza  : tons de cinza com contraste esticado (preserva traço fraco)
+//   limpa  : só a tinta, preta sobre branco (tira sombra, granulado e sobras da grade)
+//   grossa : "limpa" com o traço engrossado 1 px (caneta fina / letra corrida)
+function imagemCelula(R, G, q, tipo, alturaAlvo) {
+  if (tipo === 'cinza') return recorte(R, q, alturaAlvo);
+  const m = RecebOCR.mascaraTinta(G, R, q);
+  let t = m;
+  if (tipo === 'grossa') {
+    t = new Uint8Array(m.length);
+    for (let y = 0; y < q.h; y++) for (let x = 0; x < q.w; x++) {
+      if (!m[y * q.w + x]) continue;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const yy = y + dy, xx = x + dx;
+        if (yy >= 0 && yy < q.h && xx >= 0 && xx < q.w) t[yy * q.w + xx] = 1;
+      }
+    }
+  }
+  const k = Math.max(1, Math.min(4, alturaAlvo / q.h)), pad = 14;
+  const src = document.createElement('canvas'); src.width = q.w; src.height = q.h;
+  const sx = src.getContext('2d'), id = sx.createImageData(q.w, q.h);
+  for (let i = 0; i < t.length; i++) { const v = t[i] ? 0 : 255; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+  sx.putImageData(id, 0, 0);
+  const c = document.createElement('canvas');
+  c.width = Math.round(q.w * k) + pad * 2; c.height = Math.round(q.h * k) + pad * 2;
+  const x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+  x.imageSmoothingQuality = 'high';
+  x.drawImage(src, pad, pad, c.width - pad * 2, c.height - pad * 2);
+  return c;
+}
+
+// pontua uma leitura: confiança do OCR + bônus quando o texto "faz sentido" para a coluna
+function pontuarLeitura(k, texto, conf) {
+  const t = (texto || '').trim();
+  if (!t) return -1;
+  let p = conf;
+  if (k === 'data') p += RecebOCR.limparData(t).ok ? 40 : -20;
+  if (k === 'selb') {
+    const itens = selbsDe(t.toUpperCase()).map(x => RecebOCR.ajustarAoFormato(x, RB.formatoSelb));
+    if (itens.length && itens.every(x => /\d/.test(x) && x.replace(/[^A-Z0-9]/g, '').length >= 2)) p += 15;
+    const voc = (RB.vocab && RB.vocab.selb) || [];
+    if (itens.some(x => voc.some(v => RecebOCR.chaveSelb(v) === RecebOCR.chaveSelb(x)))) p += 25;
+  }
+  if (k === 'local') {
+    const voc = (RB.vocab && RB.vocab.local) || [];
+    const sg = voc.length && RecebOCR.sugerir(RecebOCR.limparTexto(t), voc, 0.7);
+    if (sg) p += 25 * sg.sim;
+    if (/[A-Za-zÀ-ú]{3}/.test(t)) p += 5;
+  }
+  return p;
+}
+
+// lê uma célula: modo "base" = uma imagem; "multi" = várias versões e fica com a melhor leitura
+// (para cedo quando a primeira já é boa). Retorna { texto, conf, versao }.
+async function lerCelula(w, R, G, tk, k, modo = 'multi') {
+  const cx = tk.t.caixa, f = 6;
+  const q = { x: Math.max(tk.q.x, cx.x - f), y: Math.max(tk.q.y, cx.y - f) };
+  q.w = Math.min(tk.q.x + tk.q.w, cx.x + cx.w + f) - q.x; q.h = Math.min(tk.q.y + tk.q.h, cx.y + cx.h + f) - q.y;
+  const versoes = modo === 'base' ? [['cinza', 64]] : [['cinza', 64], ['limpa', 56], ['grossa', 56]];
+  let melhor = { texto: '', conf: 0, versao: '', p: -Infinity };
+  for (const [tipo, alvo] of versoes) {
+    let texto = '', conf = 0;
+    try {
+      const { data } = await w.recognize(imagemCelula(R, G, q, tipo, alvo));
+      texto = (data.text || '').trim(); conf = Math.round(data.confidence || 0);
+    } catch { continue; }
+    const p = pontuarLeitura(k, texto, conf);
+    if (p > melhor.p) melhor = { texto, conf, versao: tipo, p };
+    // primeira leitura já confiável e coerente: não precisa das outras versões
+    if (modo !== 'base' && conf >= 88 && p >= conf) break;
+  }
+  return { texto: melhor.texto, conf: melhor.conf, versao: melhor.versao };
+}
+
 async function lerFolha() {
   const A = RB.imp.atual, R = A.R, G = A.G, el = $('#mod-receb');
   const nCol = Math.min(COLS.length, G.cols.length - 1), r0 = FOLHA_MODELO.cabecalho ? 1 : 0;
@@ -447,6 +524,10 @@ async function lerFolha() {
     if (!tarefas.length) return;
     return;
   }
+  // com locais/SELBs já registrados, testa várias versões da imagem e escolhe a leitura que bate com eles
+  // (no teste de precisão em test/ocr-bench.js isso reduziu os erros; sem lista não fez diferença)
+  if (!RB.vocab) await carregarVocab().catch(() => {});
+  const modo = RB.vocab && RB.vocab.local.length + RB.vocab.selb.length >= 5 ? 'multi' : 'base';
   const lidos = {};
   let colAtual = -1;
   tarefas.feitas = 0;
@@ -456,15 +537,8 @@ async function lerFolha() {
       colAtual = tk.c;
       await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: COLS[tk.c].wl, preserve_interword_spaces: '1' });
     }
-    // recorta só a área escrita (com folga) para tirar sobras das linhas da grade
-    const cx = tk.t.caixa, f = 6;
-    const q = { x: Math.max(tk.q.x, cx.x - f), y: Math.max(tk.q.y, cx.y - f) };
-    q.w = Math.min(tk.q.x + tk.q.w, cx.x + cx.w + f) - q.x; q.h = Math.min(tk.q.y + tk.q.h, cx.y + cx.h + f) - q.y;
-    let texto = '', conf = 0;
-    try {
-      const { data } = await w.recognize(recorte(R, q, 64));
-      texto = (data.text || '').trim(); conf = Math.round(data.confidence || 0);
-    } catch { /* célula fica vazia para digitar */ }
+    // recorta só a área escrita (com folga) e testa versões da imagem (ver lerCelula)
+    const { texto, conf } = await lerCelula(w, R, G, tk, COLS[tk.c].k, modo);
     (lidos[tk.r] = lidos[tk.r] || {})[COLS[tk.c].k] = { texto, conf };
     tarefas.feitas++;
     if ($('#rbBar')) { $('#rbBar').style.width = Math.round(tarefas.feitas / tarefas.length * 100) + '%'; $('#rbSt').textContent = `Lendo célula ${tarefas.feitas} de ${tarefas.length}…`; }
@@ -491,17 +565,26 @@ function montarRevisao(lidos) {
         // leitura ruim e inválida: melhor vazio (com a leitura como dica) do que lixo no campo
         if (!d.ok && v.conf < 50) { l.dica.data = { tipo: 'incerto', texto: v.texto.trim() }; continue; }
         l.data = d.valor; l.dataIso = d.iso;
+        if (d.corrigida) l.dica.data = { tipo: 'corrigida', texto: v.texto.trim() }; // dígito parecido trocado: conferir
         continue;
       }
       const t = RecebOCR.limparTexto(v.texto).toUpperCase();
       if (c.k === 'selb') {
         // vários SELBs: corrige cada um pela lista dos já registrados
-        const itens = selbsDe(t), voc = (RB.vocab && RB.vocab.selb) || [];
-        const corr = itens.map(x => { const sg = RecebOCR.sugerir(x, voc, 0.8); return sg ? sg.valor : x; });
-        const conhecidos = itens.filter((x, j) => RecebOCR.sugerir(x, voc, 0.8)).length;
+        // formato aprendido dos SELBs já registrados corrige letra/dígito trocados ("A2A17" -> "A2417")
+        const itens = selbsDe(t).map(x => RecebOCR.ajustarAoFormato(x, RB.formatoSelb)), voc = (RB.vocab && RB.vocab.selb) || [];
+        // SELB costuma ser sequencial (A1234, A1235...): um código bem formado NUNCA é trocado pelo "mais parecido";
+        // a lista só ajuda quando a leitura está estragada (sobrou letra/sinal fora do formato)
+        const bemFormado = x => RB.formatoSelb
+          ? new RegExp(`^[A-Z]{${RB.formatoSelb.letras}}\\d{${RB.formatoSelb.digitos}}$`).test(RecebOCR.chaveSelb(x))
+          : /^[A-Z]{0,4}\d{2,}$/.test(RecebOCR.chaveSelb(x));
+        const corrigir = x => { if (bemFormado(x)) return x; const sg = RecebOCR.sugerir(x, voc, 0.8); return sg ? sg.valor : x; };
+        const corr = itens.map(corrigir);
+        const conhecidos = itens.filter(x => bemFormado(x) || RecebOCR.sugerir(x, voc, 0.8)).length;
         if (!itens.length || (v.conf < 40 && !conhecidos)) { if (t) l.dica.selb = { tipo: 'incerto', texto: t }; continue; }
         l.selb = RecebOCR.juntarSelbs(corr);
-        if (RecebOCR.normalizar(l.selb) !== RecebOCR.normalizar(RecebOCR.juntarSelbs(itens))) l.dica.selb = { tipo: 'lista', texto: RecebOCR.juntarSelbs(itens) };
+        const lidoSelb = RecebOCR.juntarSelbs(selbsDe(t));
+        if (RecebOCR.chaveSelb(l.selb) !== RecebOCR.chaveSelb(lidoSelb)) l.dica.selb = { tipo: 'lista', texto: lidoSelb };
         continue;
       }
       // compara com o que já foi cadastrado (cursiva costuma sair "parecida")
@@ -596,7 +679,9 @@ function renderFolhaEditor(F, imgs, opt = {}) {
         const ruim = (c.k === 'data' && v && !dataOk(v)) || (conf != null && conf < 60 && !l.revisado) || (dica && dica.tipo !== 'historico' && dica.tipo !== 'histSug' && !l.revisado);
         const lista = c.k === 'local' ? 'rbDlLocal' : c.k === 'selb' ? 'rbDlSelb' : '';
         const quando = dica && dataCurta(dica.quando) ? `, última em ${dataCurta(dica.quando)}` : '';
-        const txtDica = !dica ? '' : dica.tipo === 'lista'
+        const txtDica = !dica ? '' : dica.tipo === 'corrigida'
+          ? `OCR leu “${esc(dica.texto)}” (data impossível) → corrigida; confira <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar o lido</button>`
+          : dica.tipo === 'lista'
           ? `OCR leu “${esc(dica.texto)}” → corrigido pela lista <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar “${esc(dica.texto)}”</button>`
           : dica.tipo === 'historico'
           ? `preenchido pelo histórico do SELB ${esc(dica.selb)} (${dica.vezes} entrega${dica.vezes > 1 ? 's' : ''}${quando}) — corrija se mudou${dica.texto ? ` <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar o lido “${esc(dica.texto)}”</button>` : ''}`

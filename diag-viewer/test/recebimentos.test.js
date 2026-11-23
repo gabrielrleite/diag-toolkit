@@ -66,3 +66,20 @@ assert.deepStrictEqual(O.separarSelbs(''), []);
 assert.ok(O.temSelb('A123, B77', 'b-77') && !O.temSelb('A123, B77', 'B7'));
 assert.strictEqual(O.juntarSelbs(['A1', 'B2']), 'A1, B2');
 console.log('recebimentos (vários SELBs): ok');
+
+// leitura de datas com barra perdida ou dígito trocado
+assert.strictEqual(O.limparData('1111/2026').iso, '2026-11-11');
+assert.strictEqual(O.limparData('1802/2026').iso, '2026-02-18');
+assert.strictEqual(O.limparData('25/68/26').iso, '2026-08-25');
+assert.ok(O.limparData('25/68/26').corrigida);
+assert.strictEqual(O.limparData('14/09/202', 2026).iso, '2026-09-14');
+assert.strictEqual(O.limparData('99/99/9999').ok, false);
+// SELB: ". " separa; formato aprendido corrige letra/dígito
+assert.deepStrictEqual(O.separarSelbs('B1 686. D4535'), ['B1 686', 'D4535']);
+const fmt = O.formatoSelb(['A1234', 'B2345', 'C3456', 'D4567', 'F5678', 'XX1']);
+assert.deepStrictEqual(fmt, { letras: 1, digitos: 4 });
+assert.strictEqual(O.ajustarAoFormato('A2A17', fmt), 'A2417');
+assert.strictEqual(O.ajustarAoFormato('AG691', fmt), 'A6691');
+assert.strictEqual(O.ajustarAoFormato('8123', fmt), '8123');          // tamanho diferente: não mexe
+assert.strictEqual(O.formatoSelb(['A1', 'B22']), null);                // poucos exemplos
+console.log('recebimentos (datas e formato de SELB): ok');

@@ -53,7 +53,7 @@ const SEC = {
 };
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.md': 'text/plain; charset=utf-8',
+  '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.png': 'image/png', '.ico': 'image/x-icon', '.md': 'text/plain; charset=utf-8',
   '.ps1': 'application/octet-stream', '.bat': 'application/octet-stream', '.txt': 'text/plain; charset=utf-8', '.zip': 'application/zip',
 };
 
