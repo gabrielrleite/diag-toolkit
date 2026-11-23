@@ -52,7 +52,7 @@ Com Docker, veja `docs/INSTALAR-PORTAINER.txt` e `diag-viewer/README.md`.
 
 ### Portainer direto do GitHub
 
-Stacks › Add stack › **Repository**: URL `https://github.com/gabrielrleite/diag-toolkit`, reference `refs/heads/main`, compose path **`portainer-stack.yml`**, variáveis `UPLOAD_TOKEN` e `READ_TOKEN` (opcionais: `PORTA`, `MAX_MB`, `ANEXO_MAX_MB`). Para atualizar: *Pull and redeploy* (ou GitOps updates com polling). Passo a passo em `docs/INSTALAR-PORTAINER.txt`.
+Stacks › Add stack: cole o **`portainer-stack.yml`** no *Web editor* (ou use *Repository* com compose path `portainer-stack.yml`) e defina `UPLOAD_TOKEN` e `READ_TOKEN` (opcionais: `PORTA`, `MAX_MB`, `ANEXO_MAX_MB`, `VERSAO`). O container baixa o código da `main` a cada início: para atualizar, reinicie o container. Passo a passo em `docs/INSTALAR-PORTAINER.txt`.
 
 ## Segurança
 
