@@ -649,7 +649,11 @@ function sanitizeSelbCad(b) {
   if (suprimento === 'nenhum') cores = [];
   return {
     tipo: TIPOS_EQUIP.includes(b && b.tipo) ? b.tipo : 'impressora', marca: t('marca', 80), modelo: t('modelo', 120), serie: t('serie', 80),
-    cor, suprimento, cores: [...new Set(cores)], caixa: !!(b && b.caixa), obs: txt(b && b.obs, 2000),
+    cor, suprimento, cores: [...new Set(cores)],
+    // toda impressora usa caixa de manutenção; scanner (sem suprimento) não
+    caixa: !(b && b.tipo === 'scanner') && suprimento !== 'nenhum',
+    ip: /^(\d{1,3}\.){3}\d{1,3}$/.test(t('ip', 15)) && t('ip', 15).split('.').every(n => +n <= 255) ? t('ip', 15) : '',
+    obs: txt(b && b.obs, 2000),
   };
 }
 async function selbsRoute(req, res, url, chave) {

@@ -215,9 +215,9 @@ async function renderSelbs(editar = '') {
         ${statHtml(totItens, 'tintas, toners e caixas entregues', 'caixa', 'violeta')}
         ${statHtml(multi, 'com mais de um local', 'local', multi ? 'bad' : '')}
       </div>
-      <p class="muted">Cada SELB é uma impressora ou scanner. No cadastro ficam o equipamento, se é colorida ou preto e branco, se usa <b>tinta ou toner</b>, as cores, a caixa de manutenção e os <b>códigos dos suprimentos</b> (observação).
+      <p class="muted">Cada SELB é uma impressora ou scanner. No cadastro ficam o equipamento, se é colorida ou preto, o IP, se usa <b>tinta ou toner</b>, as cores, a caixa de manutenção e os <b>códigos dos suprimentos</b> (observação).
         SELB raramente muda de lugar: mais de um local costuma ser leitura errada (use <b>usar em todas</b> no local certo).</p>
-      <div class="filters"><label>Buscar <input type="search" id="sbQ" value="${esc(CAD.qSelb)}" placeholder="SELB, local, marca, modelo, código" style="min-width:260px"></label>
+      <div class="filters"><label>Buscar <input type="search" id="sbQ" value="${esc(CAD.qSelb)}" placeholder="SELB, local, marca, modelo, IP, código" style="min-width:260px"></label>
         <label class="chk"><input type="checkbox" id="sbMulti" ${CAD.soMulti ? 'checked' : ''}> só com mais de um local</label>
         <label class="chk"><input type="checkbox" id="sbSemCad" ${CAD.soSemCad ? 'checked' : ''}> só sem cadastro</label><span class="muted" id="sbN"></span></div>
       <div id="sbLista"></div>
@@ -228,7 +228,7 @@ async function renderSelbs(editar = '') {
       const c = cadSelb(s.selb);
       if (CAD.soMulti && s.locais.size <= 1) return false;
       if (CAD.soSemCad && c) return false;
-      return !q || kSelb(s.selb).includes(qk) || [...s.locais.values()].some(o => nrm(o.nome).includes(q)) || (c && nrm([c.marca, c.modelo, c.serie, c.obs].join(' ')).includes(q));
+      return !q || kSelb(s.selb).includes(qk) || [...s.locais.values()].some(o => nrm(o.nome).includes(q)) || (c && nrm([c.marca, c.modelo, c.serie, c.ip, c.obs].join(' ')).includes(q));
     });
     $('#sbN').textContent = `${lista.length} de ${selbs.length}`;
     $('#sbLista').innerHTML = !lista.length ? vazioHtml('tag', 'Nenhum SELB', 'Os SELBs aparecem aqui conforme as folhas são importadas, ou cadastre um em "Cadastrar SELB".') : `<div class="tablewrap"><table><thead><tr><th class="nosort">SELB / equipamento</th><th class="nosort">Entregas</th><th class="nosort">Itens entregues</th><th class="nosort">Locais</th><th class="nosort">Última entrega</th><th class="nosort"></th></tr></thead><tbody>
@@ -238,7 +238,7 @@ async function renderSelbs(editar = '') {
           .sort((a, b) => Object.keys(ITENS).indexOf(a.item) - Object.keys(ITENS).indexOf(b.item));
         return `<tr class="${s.locais.size > 1 ? 'rb-multi' : ''}">
           <td><b>${esc(s.selb)}</b>${s.locais.size > 1 ? ' <span class="badge warn">mais de um local</span>' : ''}
-            <br>${c ? `<small>${esc(resumoEquip(c))}</small>${c.obs ? `<br><small class="it-obs" title="${esc(c.obs)}">${IC('tag')} ${esc(c.obs.slice(0, 70))}${c.obs.length > 70 ? '…' : ''}</small>` : ''}` : '<span class="badge">sem cadastro</span>'}</td>
+            <br>${c ? `<small>${esc(resumoEquip(c, false))}</small>${c.ip ? ` <a class="ip-link" href="http://${esc(c.ip)}" target="_blank" rel="noopener" title="Abrir o painel da impressora">${IC('monitor')}${esc(c.ip)}</a>` : ''}${c.obs ? `<br><small class="it-obs" title="${esc(c.obs)}">${IC('tag')} ${esc(c.obs.slice(0, 70))}${c.obs.length > 70 ? '…' : ''}</small>` : ''}` : '<span class="badge">sem cadastro</span>'}</td>
           <td>${s.n ? `<button class="linklike" data-ver="${esc(s.selb)}">${s.n}</button>` : '0'}</td>
           <td>${itens.length ? itensHtml(itens, false) : '<span class="muted">—</span>'}</td>
           <td>${locs.map(o => `<div class="rb-loc">${esc(o.nome)} <small>(${o.n})</small>${localCadastrado(o.nome) ? '' : ' <span class="badge warn" title="Local sem cadastro">?</span>'}
@@ -302,13 +302,14 @@ function formSelb(c, uso) {
       <label>Marca <input id="sfMarca" value="${esc(c.marca || '')}" maxlength="80" placeholder="ex.: Epson"></label>
       <label>Modelo <input id="sfModelo" value="${esc(c.modelo || '')}" maxlength="120" placeholder="ex.: L6270"></label>
       <label>Nº de série <input id="sfSerie" value="${esc(c.serie || '')}" maxlength="80"></label>
+      <label>IP da impressora <input id="sfIp" value="${esc(c.ip || '')}" maxlength="15" inputmode="decimal" placeholder="ex.: 192.168.0.50" autocomplete="off"></label>
     </div>
     <div class="sf-grupos">
-      <div><span class="lbl">Impressão</span><div class="seg2">${radio('sfCor', 'colorida', 'Colorida', cor)}${radio('sfCor', 'pb', 'Preto e branco', cor)}</div></div>
+      <div><span class="lbl">Impressão</span><div class="seg2">${radio('sfCor', 'colorida', 'Colorida', cor)}${radio('sfCor', 'pb', 'Preto', cor)}</div></div>
       <div><span class="lbl">Suprimento</span><div class="seg2">${radio('sfSup', 'tinta', 'Tinta', sup)}${radio('sfSup', 'toner', 'Toner', sup)}${radio('sfSup', 'nenhum', 'Nenhum (scanner)', sup)}</div></div>
       <div><span class="lbl">Cores usadas</span><div class="it-chips" id="sfCores">
         ${['preto', 'azul', 'magenta', 'amarelo'].map(k => `<label class="it-chip ${cores.includes(k) ? 'on' : ''}"><input type="checkbox" value="${k}" ${cores.includes(k) ? 'checked' : ''}><span class="it-bola it-${k}"></span>${ITENS[k]}</label>`).join('')}</div></div>
-      <div><span class="lbl">Manutenção</span><div class="it-chips"><label class="it-chip ${c.caixa ? 'on' : ''}"><input type="checkbox" id="sfCaixa" ${c.caixa ? 'checked' : ''}><span class="it-bola it-caixa">${IC('caixa')}</span>Usa caixa de manutenção</label></div></div>
+      <div><span class="lbl">Manutenção</span><p class="sf-nota"><span class="it-bola it-caixa">${IC('caixa')}</span>Toda impressora usa caixa de manutenção: ela entra sozinha nos itens (scanner não).</p></div>
     </div>
     <label class="full">Observação — códigos das tintas/toners e da caixa
       <textarea id="sfObs" rows="3" maxlength="2000" placeholder="ex.: Tinta T544120 (preto), T544220 (azul), T544320 (magenta), T544420 (amarelo) · Caixa C9345">${esc(c.obs || '')}</textarea></label>
@@ -338,10 +339,12 @@ function ligarFormSelb(c) {
   $('#sfSalvar').addEventListener('click', async e => {
     const selb = $('#sfSelb').value.trim().toUpperCase();
     if (!selb || RecebOCR.separarSelbs(selb).length !== 1) { alert('Informe um SELB (um só).'); return $('#sfSelb').focus(); }
+    const ip = $('#sfIp').value.trim();
+    if (ip && !ipValido(ip)) { alert('IP inválido. Use o formato 192.168.0.50.'); return $('#sfIp').focus(); }
     const corpo = {
       tipo: $('#sfTipo').value, marca: $('#sfMarca').value, modelo: $('#sfModelo').value, serie: $('#sfSerie').value,
       cor: f.querySelector('input[name="sfCor"]:checked').value, suprimento: f.querySelector('input[name="sfSup"]:checked').value,
-      cores: [...f.querySelectorAll('#sfCores input:checked')].map(cb => cb.value), caixa: $('#sfCaixa').checked, obs: $('#sfObs').value,
+      cores: [...f.querySelectorAll('#sfCores input:checked')].map(cb => cb.value), ip: $('#sfIp').value.trim(), obs: $('#sfObs').value,
     };
     e.target.disabled = true;
     const r = await api('api/receb-selbs/' + encodeURIComponent(selb), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }).catch(() => null);
