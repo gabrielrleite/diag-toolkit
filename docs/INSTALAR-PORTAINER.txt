@@ -74,6 +74,10 @@ MONITORAMENTO DAS IMPRESSORAS (ping):
   - O servidor precisa alcançar as impressoras pela rede (mesma rede ou
     rota liberada no firewall para ICMP e/ou porta 9100).
   - Quedas e retornos ficam no audit.log ("impressora_caiu"/"_voltou").
+  - Recebimentos > Impressoras: histórico de ping (linha do tempo,
+    latência, disponibilidade), histórico de quedas e PAUSAR (tudo ou uma
+    impressora; 1 h, 8 h, 24 h ou até retomar). Histórico guardado por 30
+    dias (variável opcional MONITOR_DIAS).
 
 MODO TREINAMENTO (Recebimentos > Treinamento):
   Ligado por padrão. Cada linha CONFERIDA guarda o que o OCR leu em Local,
