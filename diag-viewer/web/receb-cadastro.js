@@ -187,7 +187,7 @@ async function renderSelbs(editar = '') {
   const el = $('#mod-receb');
   el.innerHTML = abasReceb('selbs') + '<div class="panel">Carregando...</div>';
   if (!(await needServer(el))) return;
-  const [regs, , cads] = await Promise.all([carregarEntregas(), carregarLocais(), carregarSelbsCad()]);
+  const [regs, , cads] = await Promise.all([carregarEntregas(), carregarLocais(), carregarSelbsCad(), atualizarMonitor()]);
   const mapa = new Map();
   const novoS = sel => ({ selb: sel.toUpperCase(), n: 0, locais: new Map(), ult: null, itens: new Map() });
   // uma entrega com vários SELBs conta para cada um deles
@@ -208,7 +208,9 @@ async function renderSelbs(editar = '') {
   el.innerHTML = abasReceb('selbs') + `
     ${editando ? formSelb(editando, mapa.get(kSelb(editando.selb || ''))) : ''}
     <div class="panel">
-      <div class="head-row"><h2>SELBs</h2><a class="btn" href="#receb/selbs~novo">${IC('mais')}Cadastrar SELB</a></div>
+      <div class="head-row"><h2>SELBs</h2><div class="filters" style="margin:0">
+        <button class="btn ghost" id="sbPing" title="Pinga agora as impressoras com IP">${IC('raio')}Verificar impressoras</button>
+        <a class="btn" href="#receb/selbs~novo">${IC('mais')}Cadastrar SELB</a></div></div>
       <div class="stats">
         ${statHtml(selbs.length, 'SELBs', 'tag', '')}
         ${statHtml(selbs.length - semCad, 'com cadastro', 'monitor', 'ok')}
@@ -238,7 +240,7 @@ async function renderSelbs(editar = '') {
           .sort((a, b) => Object.keys(ITENS).indexOf(a.item) - Object.keys(ITENS).indexOf(b.item));
         return `<tr class="${s.locais.size > 1 ? 'rb-multi' : ''}">
           <td><b>${esc(s.selb)}</b>${s.locais.size > 1 ? ' <span class="badge warn">mais de um local</span>' : ''}
-            <br>${c ? `<small>${esc(resumoEquip(c, false))}</small>${c.ip ? ` <a class="ip-link" href="http://${esc(c.ip)}" target="_blank" rel="noopener" title="Abrir o painel da impressora">${IC('monitor')}${esc(c.ip)}</a>` : ''}${c.obs ? `<br><small class="it-obs" title="${esc(c.obs)}">${IC('tag')} ${esc(c.obs.slice(0, 70))}${c.obs.length > 70 ? '…' : ''}</small>` : ''}` : '<span class="badge">sem cadastro</span>'}</td>
+            <br>${c ? `<small>${esc(resumoEquip(c, false))}</small>${c.ip ? ` <a class="ip-link" href="http://${esc(c.ip)}" target="_blank" rel="noopener" title="Abrir o painel da impressora">${situacaoHtml(c.ip)}${esc(c.ip)}</a>` : ''}${c.obs ? `<br><small class="it-obs" title="${esc(c.obs)}">${IC('tag')} ${esc(c.obs.slice(0, 70))}${c.obs.length > 70 ? '…' : ''}</small>` : ''}` : '<span class="badge">sem cadastro</span>'}</td>
           <td>${s.n ? `<button class="linklike" data-ver="${esc(s.selb)}">${s.n}</button>` : '0'}</td>
           <td>${itens.length ? itensHtml(itens, false) : '<span class="muted">—</span>'}</td>
           <td>${locs.map(o => `<div class="rb-loc">${esc(o.nome)} <small>(${o.n})</small>${localCadastrado(o.nome) ? '' : ' <span class="badge warn" title="Local sem cadastro">?</span>'}
@@ -282,6 +284,10 @@ async function renderSelbs(editar = '') {
       if (r) { alert(`SELB apagado de ${r.linhas} entrega(s).`); renderSelbs(); }
     }));
   };
+  $('#sbPing').addEventListener('click', async e => {
+    e.target.disabled = true; e.target.textContent = 'Verificando…';
+    await atualizarMonitor(true); renderSelbs();
+  });
   $('#sbQ').addEventListener('input', e => { CAD.qSelb = e.target.value; desenhar(); });
   $('#sbMulti').addEventListener('change', e => { CAD.soMulti = e.target.checked; desenhar(); });
   $('#sbSemCad').addEventListener('change', e => { CAD.soSemCad = e.target.checked; desenhar(); });

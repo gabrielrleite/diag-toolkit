@@ -689,3 +689,25 @@ td .it-obs { display: inline-block; max-width: 380px; vertical-align: bottom; }
 .ip-link { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-size: 12px; font-family: var(--mono); text-decoration: none; padding: 0 7px; border-radius: 999px; background: var(--accent-soft); }
 .ip-link .ic { width: 13px; height: 13px; vertical-align: 0; }
 .ip-link:hover { text-decoration: underline; }
+
+/* ---------- monitoramento das impressoras */
+.mon-bola { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--line-2); flex: none; }
+.mon-bola.on { background: #22c55e; box-shadow: 0 0 0 3px color-mix(in srgb, #22c55e 22%, transparent); }
+.mon-bola.off { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 25%, transparent); animation: mon-pulso 1.6s ease-in-out infinite; }
+@keyframes mon-pulso { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--bad) 8%, transparent); } }
+.ip-link .mon-bola { margin-right: 2px; }
+.imp-status { padding: 14px 18px; }
+.imp-status.alerta { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); background: linear-gradient(100deg, var(--bad-soft), var(--panel) 75%); }
+.imp-status.ok { background: linear-gradient(100deg, var(--ok-soft), var(--panel) 60%); }
+.imp-linha { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.imp-linha > div:nth-child(2) { margin-right: auto; }
+.imp-acoes { display: flex; gap: 8px; flex-wrap: wrap; }
+.imp-ic { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; flex: none; }
+.imp-ic .ic { width: 22px; height: 22px; }
+.imp-ic.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.imp-ic.bad { color: #fff; background: var(--bad); box-shadow: 0 8px 20px -8px var(--bad); }
+.imp-lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; margin-top: 12px; }
+.imp-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--panel); border: 1px solid color-mix(in srgb, var(--bad) 30%, var(--line)); }
+.imp-item > div { margin-right: auto; min-width: 0; }
+.side-alerta { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; display: inline-grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff; background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, .25); }
+@media (max-width: 900px) { .side .mods a .side-alerta { display: inline-grid; } }

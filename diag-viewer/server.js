@@ -22,6 +22,7 @@
   - GET/POST /api/receb-locais, PUT/DELETE /api/receb-locais/:id   cadastro de locais (endereço completo)
   - POST /api/recebimentos/lote     corrige/apaga um local ou SELB em todas as folhas
   - GET /api/receb-selbs, PUT/DELETE /api/receb-selbs/:selb   cadastro dos SELBs (equipamento, cores, tinta/toner)
+  - GET /api/monitor, POST /api/monitor/verificar   ping das impressoras com IP (a cada MONITOR_MIN minutos)
   - GET /api/ocr/saude, POST /api/ocr   repasse ao serviço diag-ocr (TrOCR), se OCR_URL estiver definido
   - GET /api/treino, PUT /api/treino/config, POST /api/treino/exemplos, POST /api/treino/esquecer,
     GET /api/treino/exportar.zip, DELETE /api/treino   modo treinamento (aprender com as correções)
@@ -42,6 +43,7 @@ const UPLOAD_TOKEN = process.env.UPLOAD_TOKEN || '';
 const READ_TOKEN = process.env.READ_TOKEN || '';
 const MAX_BYTES = (+process.env.MAX_MB || 500) * 1048576;
 const OCR_URL = (process.env.OCR_URL || '').replace(/\/$/, ''); // serviço diag-ocr (ex.: http://ocr:8000)
+const MONITOR_MIN = Math.max(1, +process.env.MONITOR_MIN || 5); // intervalo do ping das impressoras (minutos)
 const DIR = path.join(DATA, 'coletas');
 const ID_RE = /^\d{8}T\d{6}Z-[0-9a-f]{6}$/;
 const AID_RE = /^[0-9a-f]{12}$/;
@@ -676,6 +678,7 @@ async function selbsRoute(req, res, url, chave) {
       const novo = { selb, ...sanitizeSelbCad(body), criadoEm: i >= 0 ? db.selbs[i].criadoEm : agora, atualizadoEm: agora };
       if (i >= 0) db.selbs[i] = novo; else db.selbs.push(novo);
       await writeJsonAtomic(SELBS_FILE, db);
+      setTimeout(() => rodadaMonitor().catch(() => {}), 500); // IP novo/alterado: verifica logo
       return { code: 200, obj: novo, audit: { acao: 'selb_cadastrado', selb } };
     }
     if (req.method === 'DELETE') {
@@ -690,6 +693,104 @@ async function selbsRoute(req, res, url, chave) {
   if (out.audit) await audit({ ...out.audit, ip });
   return json(res, out.code, out.erro ? { erro: out.erro } : out.obj);
 }
+
+// ------------------------------------------------------------------ monitoramento das impressoras (ping)
+// A cada MONITOR_MIN minutos: 1 ping pequeno (16 bytes) por impressora com IP cadastrado. Se falhar, confirma
+// com um 2º ping e com as portas de impressora (9100/631/515) — impressora que só bloqueia ping não vira
+// alarme falso. Estado em recebimentos/monitor.json; quedas e retornos vão para o audit.log.
+const { execFile } = require('child_process');
+const net = require('net');
+const MONITOR_FILE = path.join(RDIR, 'monitor.json');
+const IP_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const ipOk = ip => IP_RE.test(ip || '') && ip.split('.').every(n => +n <= 255);
+let monitor = { rodada: null, ping: null, estados: {} }; // estados[ip] = { online, desde, verificadoEm, ms, via }
+let monitorRodando = null;
+try { monitor = { ...monitor, ...JSON.parse(fs.readFileSync(MONITOR_FILE, 'utf8')) }; } catch { /* primeira vez */ }
+
+function pingar(ip) {
+  return new Promise(resolve => {
+    if (!ipOk(ip)) return resolve({ ok: false, erro: 'ip' });
+    const t0 = Date.now();
+    execFile('ping', ['-c', '1', '-W', '2', '-s', '16', ip], { timeout: 6000 }, (err, out) => {
+      if (err && err.code === 'ENOENT') return resolve({ ok: false, semPing: true });
+      if (err) return resolve({ ok: false });
+      const m = String(out).match(/time[=<]\s*([\d.]+)/) || String(out).match(/min\/avg\/max[^=]*=\s*([\d.]+)/);
+      resolve({ ok: true, ms: m ? Math.round(+m[1]) : Date.now() - t0 });
+    });
+  });
+}
+function portaAberta(ip, porta, ms = 2000) {
+  return new Promise(resolve => {
+    const sock = net.connect({ host: ip, port: porta });
+    const fim = ok => { sock.destroy(); resolve(ok); };
+    sock.setTimeout(ms, () => fim(false));
+    sock.once('connect', () => fim(true));
+    sock.once('error', () => fim(false));
+  });
+}
+async function verificarImpressora(ip) {
+  let r = await pingar(ip);
+  if (r.semPing) monitor.ping = 'indisponivel';
+  else if (monitor.ping !== 'ok') monitor.ping = 'ok';
+  if (r.ok) return { online: true, ms: r.ms, via: 'ping' };
+  if (!r.semPing) { r = await pingar(ip); if (r.ok) return { online: true, ms: r.ms, via: 'ping' }; }
+  // portas próprias de impressora (JetDirect, IPP, LPD). 80/443 não: proxy transparente da rede aceita conexão em qualquer IP
+  for (const porta of [9100, 631, 515]) if (await portaAberta(ip, porta)) return { online: true, ms: null, via: 'porta ' + porta };
+  return { online: false, ms: null, via: r.semPing ? 'portas' : 'ping' };
+}
+async function rodadaMonitor() {
+  if (monitorRodando) return monitorRodando;
+  monitorRodando = (async () => {
+    const cads = (await lerSelbsCad()).selbs.filter(c => ipOk(c.ip));
+    const ips = [...new Set(cads.map(c => c.ip))];
+    const agora = new Date().toISOString();
+    const fila = [...ips];
+    const trabalhar = async () => {
+      while (fila.length) {
+        const ip = fila.shift();
+        const r = await verificarImpressora(ip);
+        const ant = monitor.estados[ip];
+        const mudou = !ant || ant.online !== r.online;
+        monitor.estados[ip] = { online: r.online, desde: mudou ? agora : ant.desde, verificadoEm: new Date().toISOString(), ms: r.ms, via: r.via };
+        if ((ant && mudou) || (!ant && !r.online)) { // queda/retorno; ou já fora do ar na 1ª verificação
+          const sel = cads.filter(c => c.ip === ip).map(c => c.selb).join(', ');
+          await audit({ acao: r.online ? 'impressora_voltou' : 'impressora_caiu', ip, selb: sel });
+          console.log(`[monitor] ${sel} (${ip}) ${r.online ? 'voltou' : 'FORA DO AR'}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(16, ips.length) }, trabalhar)); // até 16 ao mesmo tempo
+    for (const ip of Object.keys(monitor.estados)) if (!ips.includes(ip)) delete monitor.estados[ip]; // IP removido do cadastro
+    monitor.rodada = new Date().toISOString();
+    await writeJsonAtomic(MONITOR_FILE, monitor).catch(e => console.error('monitor:', e.message));
+  })().finally(() => { monitorRodando = null; });
+  return monitorRodando;
+}
+async function monitorRoute(req, res, url, acao) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  if (acao === 'verificar') {
+    if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+    req.resume();
+    await rodadaMonitor();
+  } else if (req.method !== 'GET') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+  // local de cada SELB: o da última entrega registrada
+  const ultimoLocal = new Map();
+  for (const f of await listFolhas(true)) for (const l of f.linhas) {
+    if (!l.local) continue;
+    for (const sel of RecebOCR.separarSelbs(l.selb)) {
+      const k = chaveSelbRec(sel), q = l.dataIso || (f.criadoEm || '').slice(0, 10), u = ultimoLocal.get(k);
+      if (!u || q >= u.q) ultimoLocal.set(k, { local: l.local, q });
+    }
+  }
+  const impressoras = (await lerSelbsCad()).selbs.filter(c => ipOk(c.ip)).map(c => {
+    const e = monitor.estados[c.ip] || null;
+    return { selb: c.selb, ip: c.ip, tipo: c.tipo, marca: c.marca, modelo: c.modelo, local: (ultimoLocal.get(chaveSelbRec(c.selb)) || {}).local || '',
+      online: e ? e.online : null, desde: e ? e.desde : null, verificadoEm: e ? e.verificadoEm : null, ms: e ? e.ms : null, via: e ? e.via : null };
+  });
+  json(res, 200, { intervaloMin: MONITOR_MIN, rodada: monitor.rodada, ping: monitor.ping, verificando: !!monitorRodando, impressoras });
+}
+setTimeout(() => rodadaMonitor().catch(e => console.error('monitor:', e.message)), 15000).unref();
+setInterval(() => rodadaMonitor().catch(e => console.error('monitor:', e.message)), MONITOR_MIN * 60000).unref();
 
 // ------------------------------------------------------------------ OCR no servidor (repasse ao diag-ocr)
 async function ocrRoute(req, res, url, acao) {
@@ -1371,6 +1472,8 @@ const server = http.createServer(async (req, res) => {
     if (oc) return await ocrRoute(req, res, url, oc[1]);
     const tr = p.match(/^\/api\/treino(?:\/(config|exemplos|esquecer|exportar\.zip))?$/);
     if (tr) return await treinoRoute(req, res, url, tr[1]);
+    const mo = p.match(/^\/api\/monitor(?:\/(verificar))?$/);
+    if (mo) return await monitorRoute(req, res, url, mo[1]);
     const sc = p.match(/^\/api\/receb-selbs(?:\/([^/]+))?$/);
     if (sc) return await selbsRoute(req, res, url, sc[1]);
     const lc = p.match(/^\/api\/receb-locais(?:\/([^/]+))?$/);

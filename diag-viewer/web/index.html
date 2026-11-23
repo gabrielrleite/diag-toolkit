@@ -20,7 +20,7 @@
     <a href="#" data-mod="coletas" class="on"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-chip"/></svg><span>Remoção de hardware</span></a>
     <a href="#laudos" data-mod="laudos"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-doc"/></svg><span>Laudos de manutenção</span></a>
     <a href="#equip" data-mod="equip"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-monitor"/></svg><span>Equipamentos</span></a>
-    <a href="#receb" data-mod="receb"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-caixa"/></svg><span>Recebimentos</span></a>
+    <a href="#receb" data-mod="receb"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-caixa"/></svg><span>Recebimentos</span><span class="side-alerta" id="sideImp" hidden></span></a>
     <span class="mods-tit">Ferramentas</span>
     <a href="download/" class="ext"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-download"/></svg><span>Downloads</span></a>
   </nav>
@@ -50,6 +50,7 @@
 <main class="noprint-main">
  <div id="mod-coletas">
   <section id="home">
+    <div id="impStatus" class="panel imp-status" hidden></div>
     <div class="panel dl-banner"><span class="dl-ic"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-download"/></svg></span><div><b>Scripts prontos para este servidor</b><br><span class="muted">Diagnóstico do computador (manutenção), remoção de hardware e Agente diag, já configurados para enviar as coletas para cá.</span></div>
       <a class="btn" href="download/">Downloads</a></div>
     <div id="server" class="panel" hidden></div>
@@ -97,6 +98,7 @@
 <script src="receb-ocr.js"></script>
 <script src="recebimentos.js"></script>
 <script src="receb-cadastro.js"></script>
+<script src="monitor.js"></script>
 <script src="laudos.js"></script>
 <script src="assinatura.js"></script>
 </body>
