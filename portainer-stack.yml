@@ -1,40 +1,65 @@
-# diag-viewer: stack para o Portainer, montada direto do GitHub.
+# diag-viewer: stack para o Portainer.
 #
-# Portainer > Stacks > Add stack > Build method: Repository
+# Funciona colando no Web editor OU pelo método Repository:
 #   Repository URL:       https://github.com/gabrielrleite/diag-toolkit
 #   Repository reference: refs/heads/main
 #   Compose path:         portainer-stack.yml
-#   (repositório privado: ative Authentication com usuário do GitHub + token de acesso)
-#   Environment variables: UPLOAD_TOKEN e READ_TOKEN (obrigatórios), MAX_MB, ANEXO_MAX_MB, PORTA
-# Passo a passo completo: docs/INSTALAR-PORTAINER.txt
+# Environment variables: UPLOAD_TOKEN e READ_TOKEN (obrigatórios); PORTA, MAX_MB, ANEXO_MAX_MB, VERSAO (opcionais).
 #
-# Dados (coletas, laudos, recebimentos, anexos, audit.log) ficam no volume "coletas":
-# atualizar ou recriar a stack não apaga nada.
+# Não monta imagem: usa node:22-alpine e, a cada início, baixa o código da branch VERSAO (padrão main)
+# do GitHub. ATUALIZAR = reiniciar o container diag-viewer. Se o GitHub estiver fora do ar, usa a
+# última versão baixada (volume "codigo").
+# Dados (coletas, laudos, recebimentos, anexos, audit.log) ficam no volume "coletas".
+# Passo a passo: docs/INSTALAR-PORTAINER.txt
 
 services:
-  # Ajusta o dono dos dados para o usuário "node" do container (uid 1000).
-  # Necessário quando o volume veio da instalação antiga (container rodando como root).
-  # Roda, termina e fica parado ("exited") — é normal.
+  # Ajusta o dono dos volumes para o usuário "node" (uid 1000). Necessário quando o volume veio da
+  # instalação antiga (que rodava como root). Roda, termina e fica "exited" — é normal.
   permissoes:
     image: alpine:3.20
-    command: ["chown", "-R", "1000:1000", "/data"]
+    command: ["chown", "-R", "1000:1000", "/data", "/app"]
     volumes:
       - coletas:/data
+      - codigo:/app
     restart: "no"
 
   diag-viewer:
-    build:
-      context: ./diag-viewer
-    image: diag-viewer:latest
-    # sempre monta a imagem com o código baixado (o "Pull and redeploy" do Portainer pega a versão nova)
-    pull_policy: build
+    image: node:22-alpine
     container_name: diag-viewer
+    user: "1000:1000"
     depends_on:
       permissoes:
         condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        URL="https://codeload.github.com/gabrielrleite/diag-toolkit/tar.gz/$${VERSAO}"
+        echo "Baixando o código ($${VERSAO}) do GitHub..."
+        rm -rf /tmp/novo && mkdir -p /tmp/novo
+        if wget -q -T 120 -O /tmp/codigo.tgz "$$URL" && tar xzf /tmp/codigo.tgz -C /tmp/novo; then
+          D=$$(echo /tmp/novo/*/diag-viewer)
+          if [ -f "$$D/server.js" ]; then
+            rm -rf /app/novo && cp -r "$$D" /app/novo && rm -rf /app/atual && mv /app/novo /app/atual
+            echo "Código atualizado."
+          else
+            echo "AVISO: o pacote baixado não tem diag-viewer/server.js; mantendo a versão anterior."
+          fi
+        else
+          echo "AVISO: não foi possível baixar do GitHub; usando a última versão baixada."
+        fi
+        rm -rf /tmp/novo /tmp/codigo.tgz
+        if [ ! -f /app/atual/server.js ]; then
+          echo "ERRO: nenhuma versão do código disponível. Verifique o acesso do servidor a codeload.github.com."
+          exit 1
+        fi
+        cd /app/atual && exec node server.js
     ports:
       - "${PORTA:-80}:8080"
     environment:
+      VERSAO: ${VERSAO:-main}
+      PORT: 8080
+      DATA_DIR: /data
+      NODE_ENV: production
       UPLOAD_TOKEN: ${UPLOAD_TOKEN:?defina UPLOAD_TOKEN nas Environment variables da stack}
       READ_TOKEN: ${READ_TOKEN:?defina READ_TOKEN nas Environment variables da stack}
       MAX_MB: ${MAX_MB:-500}
@@ -42,7 +67,15 @@ services:
       TZ: America/Sao_Paulo
     volumes:
       - coletas:/data
+      - codigo:/app
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/info"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 3m
     restart: unless-stopped
 
 volumes:
   coletas:
+  codigo:

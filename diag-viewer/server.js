@@ -1107,7 +1107,9 @@ async function serveStatic(req, res, url) {
 
 // ------------------------------------------------------------------ roteamento
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
+  // caminhos como "//" fazem o new URL() lançar erro: responde 400 em vez de derrubar o servidor
+  let url;
+  try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400, SEC); return res.end(); }
   const p = url.pathname;
   try {
     if (p === '/api/info' && req.method === 'GET') {
