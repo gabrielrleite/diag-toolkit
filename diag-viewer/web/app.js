@@ -715,6 +715,7 @@ async function api(path, opts = {}) {
 
 async function loadServerList() {
   const box = $('#server');
+  if (typeof atualizarMonitor === 'function') atualizarMonitor(); // situação das impressoras (tela inicial)
   if (location.protocol === 'file:') return;
   try {
     const ri = await api('api/info');

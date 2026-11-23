@@ -64,6 +64,16 @@ OCR DE LETRA À MÃO NO SERVIDOR (serviço "ocr" / diag-ocr):
   - Servidor fraco: apague o bloco "ocr:" da stack (Editor > Update the
     stack). A Central diag continua funcionando, lendo no navegador.
 
+MONITORAMENTO DAS IMPRESSORAS (ping):
+  Cada SELB com IP no cadastro é verificado a cada 5 minutos (variável
+  opcional MONITOR_MIN na stack). Impressora fora do ar aparece na tela
+  inicial e com um contador vermelho no menu Recebimentos.
+  - Usa ping (pacote de 16 bytes); se não responder, tenta de novo e
+    testa as portas de impressora 9100, 631 e 515.
+  - O servidor precisa alcançar as impressoras pela rede (mesma rede ou
+    rota liberada no firewall para ICMP e/ou porta 9100).
+  - Quedas e retornos ficam no audit.log ("impressora_caiu"/"_voltou").
+
 MODO TREINAMENTO (Recebimentos > Treinamento):
   Ligado por padrão. Cada linha CONFERIDA guarda o que o OCR leu em Local,
   SELB e Data e o texto final (com o recorte dessas células; CPF, nome e
