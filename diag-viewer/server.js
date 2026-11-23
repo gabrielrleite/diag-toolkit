@@ -19,6 +19,8 @@
   - GET  /api/coleta/pacote.zip     scripts de coleta com diag-servidor.cfg preenchido
   - GET/POST /api/recebimentos, GET/PUT/DELETE /api/recebimentos/:id   folhas de recebimento (lidas por OCR no navegador)
   - .../api/recebimentos/:id/anexos[/:aid]   foto original e imagem retificada da folha
+  - GET/POST /api/receb-locais, PUT/DELETE /api/receb-locais/:id   cadastro de locais (endereço completo)
+  - POST /api/recebimentos/lote     corrige/apaga um local ou SELB em todas as folhas
   Sem dependencias externas: so Node.js.
 */
 const http = require('http');
@@ -494,6 +496,103 @@ async function recebRoute(req, res, url, id) {
     return json(res, 200, { ok: true });
   }
   json(res, 405, { erro: 'Método não permitido.' });
+}
+
+// ------------------------------------------------------------------ cadastro de locais e correção em lote
+const LOCAIS_FILE = path.join(RDIR, 'locais.json');
+const LOCID_RE = /^[0-9a-f]{10}$/;
+const normRec = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+const chaveSelbRec = t => normRec(t).replace(/ /g, '');
+async function lerLocais() { try { return JSON.parse(await fsp.readFile(LOCAIS_FILE, 'utf8')); } catch { return { locais: [], removidos: [] }; } }
+function sanitizeLocal(b) {
+  const t = (k, max) => txt(b && b[k], max).replace(/[\r\n\t]+/g, ' ').trim();
+  return {
+    nome: t('nome', 160), logradouro: t('logradouro', 200), numero: t('numero', 20), complemento: t('complemento', 120),
+    bairro: t('bairro', 120), cidade: t('cidade', 120), uf: t('uf', 2).toUpperCase().replace(/[^A-Z]/g, ''),
+    cep: t('cep', 9).replace(/[^\d-]/g, ''), referencia: t('referencia', 300), obs: txt(b && b.obs, 1000),
+  };
+}
+async function locaisRoute(req, res, url, id) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  const ip = ipOf(req);
+  if (id && !LOCID_RE.test(id)) { req.resume(); return json(res, 400, { erro: 'id de local inválido' }); }
+  if (req.method === 'GET' && !id) return json(res, 200, (await lerLocais()).locais);
+  let body = {};
+  if (req.method === 'POST' || req.method === 'PUT') {
+    try { body = await readJsonBody(req, 20000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+  }
+  const out = await withLock('receb-locais', async () => {
+    const db = await lerLocais();
+    const agora = new Date().toISOString();
+    const dup = (nome, exceto) => db.locais.find(l => l.id !== exceto && normRec(l.nome) === normRec(nome));
+    if (req.method === 'POST' && !id) {
+      const L = sanitizeLocal(body);
+      if (!L.nome) return { code: 400, erro: 'Informe o nome do local.' };
+      if (dup(L.nome)) return { code: 409, erro: `Já existe o local "${dup(L.nome).nome}".` };
+      const novo = { id: crypto.randomBytes(5).toString('hex'), ...L, criadoEm: agora, atualizadoEm: agora };
+      db.locais.push(novo); await writeJsonAtomic(LOCAIS_FILE, db);
+      return { code: 201, obj: novo, audit: { acao: 'local_cadastrado', local: novo.id, nome: novo.nome } };
+    }
+    const i = db.locais.findIndex(l => l.id === id);
+    if (!id || i < 0) return { code: id ? 404 : 405, erro: id ? 'Local não encontrado.' : 'Método não permitido.' };
+    if (req.method === 'PUT') {
+      const L = sanitizeLocal(body);
+      if (!L.nome) return { code: 400, erro: 'Informe o nome do local.' };
+      if (dup(L.nome, id)) return { code: 409, erro: `Já existe o local "${dup(L.nome, id).nome}".` };
+      db.locais[i] = { ...db.locais[i], ...L, atualizadoEm: agora };
+      await writeJsonAtomic(LOCAIS_FILE, db);
+      return { code: 200, obj: db.locais[i], audit: { acao: 'local_alterado', local: id, nome: L.nome } };
+    }
+    if (req.method === 'DELETE') {
+      // fica guardado em "removidos" (auditoria); as entregas não são alteradas
+      const [rem] = db.locais.splice(i, 1);
+      db.removidos = [...(db.removidos || []), { ...rem, removidoEm: agora, removidoPorIp: ip }];
+      await writeJsonAtomic(LOCAIS_FILE, db);
+      return { code: 200, obj: { ok: true }, audit: { acao: 'local_removido', local: id, nome: rem.nome } };
+    }
+    return { code: 405, erro: 'Método não permitido.' };
+  });
+  if (out.audit) await audit({ ...out.audit, ip });
+  return json(res, out.code, out.erro ? { erro: out.erro } : out.obj);
+}
+
+// troca (ou apaga, com para = '') um valor de local/SELB em todas as folhas.
+// Opcional: só nas linhas de um SELB (corrigir o local de um SELB).
+async function loteRoute(req, res, url) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+  let b;
+  try { b = await readJsonBody(req, 20000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+  const campo = b.campo === 'selb' ? 'selb' : b.campo === 'local' ? 'local' : '';
+  const de = txt(b.de, 160).trim(), para = txt(b.para, campo === 'local' ? 160 : 40).replace(/[\r\n\t]+/g, ' ').trim();
+  const soSelb = txt(b.selb, 40).trim();
+  if (!campo || !de) return json(res, 400, { erro: 'Informe o campo e o valor a corrigir.' });
+  const igual = campo === 'selb' ? (x, y) => chaveSelbRec(x) === chaveSelbRec(y) : (x, y) => normRec(x) === normRec(y);
+  const novoValor = campo === 'selb' ? para.toUpperCase() : para;
+  const names = (await fsp.readdir(RDIR)).filter(n => n.endsWith('.json') && RID_RE.test(n.slice(0, -5)));
+  let linhas = 0, folhas = 0;
+  for (const n of names) {
+    const id = n.slice(0, -5), file = path.join(RDIR, n);
+    const mudou = await withLock('receb:' + id, async () => {
+      const f = JSON.parse(await fsp.readFile(file, 'utf8').catch(() => 'null'));
+      if (!f) return 0;
+      let c = 0;
+      for (const l of f.linhas || []) {
+        if (!l[campo] || !igual(l[campo], de) || (soSelb && chaveSelbRec(l.selb) !== chaveSelbRec(soSelb))) continue;
+        l[campo] = novoValor; c++;
+        if (!novoValor) l.revisado = false; // ficou sem valor: volta para conferência
+        if (l.conf) delete l.conf[campo];
+      }
+      if (!c) return 0;
+      await fsp.writeFile(path.join(RDIR, `${id}.r${f.revisao}.json.bak`), JSON.stringify(f, null, 2));
+      f.revisao++; f.atualizadoEm = new Date().toISOString();
+      await writeJsonAtomic(file, f);
+      return c;
+    });
+    if (mudou) { linhas += mudou; folhas++; }
+  }
+  await audit({ acao: 'recebimentos_lote', campo, de, para: novoValor, selb: soSelb, linhas, folhas, ip: ipOf(req) });
+  json(res, 200, { linhas, folhas });
 }
 
 // ------------------------------------------------------------------ modelos de laudo
@@ -1025,6 +1124,9 @@ const server = http.createServer(async (req, res) => {
     if (la) return await anexoRoute(req, res, url, owner('laudo', la[1]), la[2]);
     const ra = p.match(/^\/api\/recebimentos\/([^/]+)\/anexos(?:\/([^/]+))?$/);
     if (ra) return await anexoRoute(req, res, url, owner('receb', ra[1]), ra[2]);
+    if (p === '/api/recebimentos/lote') return await loteRoute(req, res, url);
+    const lc = p.match(/^\/api\/receb-locais(?:\/([^/]+))?$/);
+    if (lc) return await locaisRoute(req, res, url, lc[1]);
     const rr = p.match(/^\/api\/recebimentos(?:\/([^/]+))?$/);
     if (rr) return await recebRoute(req, res, url, rr[1]);
     const mm = p.match(/^\/api\/modelos(?:\/([^/]+))?(?:\/(restaurar))?$/);
