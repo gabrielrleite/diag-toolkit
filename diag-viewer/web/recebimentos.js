@@ -27,14 +27,17 @@ const ITENS_CURTO = { preto: 'P', azul: 'A', magenta: 'M', amarelo: 'Am', caixa:
 const SUPRIMENTO_TXT = { tinta: 'tinta', toner: 'toner', nenhum: 'sem suprimento' };
 const TIPO_EQUIP_TXT = { impressora: 'Impressora', multifuncional: 'Multifuncional', scanner: 'Scanner', outro: 'Outro' };
 const cadSelb = selb => RB.selbsCad.get(RecebOCR.chaveSelb(selb)) || null;
+// toda impressora usa caixa de manutenção; scanner (sem suprimento) não
+const usaCaixa = c => !c || (c.tipo !== 'scanner' && c.suprimento !== 'nenhum');
+const ipValido = ip => /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(ip) && ip.split('.').every(n => +n <= 255);
 // suprimentos que o SELB usa (pelo cadastro; sem cadastro, todas as opções)
 function suprimentosDe(selb) {
   const c = cadSelb(selb);
   if (!c) return ['preto', 'azul', 'magenta', 'amarelo', 'caixa'];
-  return [...c.cores, ...(c.caixa ? ['caixa'] : [])];
+  return [...c.cores, ...(usaCaixa(c) ? ['caixa'] : [])];
 }
 const nomeSuprimento = (item, tipo) => item === 'caixa' ? ITENS.caixa : `${tipo === 'toner' ? 'Toner' : 'Tinta'} ${ITENS[item].toLowerCase()}`;
-const resumoEquip = c => !c ? '' : [TIPO_EQUIP_TXT[c.tipo], [c.marca, c.modelo].filter(Boolean).join(' '), c.cor === 'pb' ? 'preto e branco' : 'colorida', SUPRIMENTO_TXT[c.suprimento]].filter(Boolean).join(' · ');
+const resumoEquip = (c, comIp = true) => !c ? '' : [TIPO_EQUIP_TXT[c.tipo], [c.marca, c.modelo].filter(Boolean).join(' '), c.suprimento === 'nenhum' ? '' : c.cor === 'pb' ? 'preto' : 'colorida', SUPRIMENTO_TXT[c.suprimento], comIp && c.ip ? 'IP ' + c.ip : ''].filter(Boolean).join(' · ');
 // bolinhas coloridas com quantidade (lista, aba SELBs)
 function itensHtml(itens, porSelb = true) {
   if (!itens || !itens.length) return '<span class="muted">—</span>';
@@ -772,7 +775,7 @@ function itensEditor(l, i) {
   if (!sels.length) return `<div class="it-ed it-vazio">${IC('caixa')} Informe o SELB para marcar as tintas/toners e caixas entregues.</div>`;
   return `<div class="it-ed">${sels.map(sel => {
     const c = cadSelb(sel), tipo = c && c.suprimento === 'toner' ? 'toner' : 'tinta';
-    const chips = c && c.suprimento === 'nenhum' && !c.caixa ? '<span class="muted">sem suprimentos (scanner)</span>' : suprimentosDe(sel).map(item => {
+    const chips = c && !suprimentosDe(sel).length ? '<span class="muted">sem suprimentos (scanner)</span>' : suprimentosDe(sel).map(item => {
       const it = (l.itens || []).find(x => x.selb === sel && x.item === item);
       return `<label class="it-chip ${it ? 'on' : ''}" title="${esc(nomeSuprimento(item, tipo))}"><input type="checkbox" data-it data-i="${i}" data-selb="${esc(sel)}" data-item="${item}" ${it ? 'checked' : ''}>
         <span class="it-bola it-${item}">${item === 'caixa' ? IC('caixa') : ''}</span>${item === 'caixa' ? 'Caixa' : ITENS[item].replace(' (ciano)', '')}

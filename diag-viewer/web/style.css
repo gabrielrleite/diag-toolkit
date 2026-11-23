@@ -685,3 +685,7 @@ tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--panel-2) 65%,
 td.acoes .menu-acoes { margin-left: 4px; }
 .tablewrap:has(.menu-acoes[open]) { overflow: visible; }
 td .it-obs { display: inline-block; max-width: 380px; vertical-align: bottom; }
+.sf-nota { display: flex; align-items: center; gap: 8px; margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+.ip-link { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-size: 12px; font-family: var(--mono); text-decoration: none; padding: 0 7px; border-radius: 999px; background: var(--accent-soft); }
+.ip-link .ic { width: 13px; height: 13px; vertical-align: 0; }
+.ip-link:hover { text-decoration: underline; }
