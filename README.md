@@ -8,6 +8,7 @@ Ferramentas de diagnóstico de hardware para PCs Windows, com um servidor web pa
 |---|---|
 | `diag-scripts/` | Scripts de coleta (PowerShell + menu `.bat`). Só leem o sistema. |
 | `diag-viewer/` | **Central diag**: servidor Node.js sem dependências + interface web (tema claro/escuro). |
+| `diag-ocr/` | OCR de letra à mão (TrOCR em ONNX Runtime, sem GPU) usado pela Central diag; serviço `ocr` da stack. |
 | `docs/` | Instalação com Docker/Portainer. |
 
 ### Scripts
