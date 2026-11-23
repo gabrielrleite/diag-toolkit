@@ -51,12 +51,12 @@ async function renderReceb(arg) {
     <div class="panel">
       <div class="head-row"><h2>Folhas de recebimento</h2><a class="btn" href="#receb/importar">Importar folhas (OCR)</a></div>
       <div class="stats">
-        <div class="stat"><div class="v">${RB.folhas.length}</div><div class="l">folhas</div></div>
-        <div class="stat"><div class="v">${regs.length}</div><div class="l">recebimentos registrados</div></div>
-        <div class="stat"><div class="v">${regs.reduce((a, l) => a + selbsDe(l.selb).length, 0)}</div><div class="l">SELBs entregues</div></div>
-        <div class="stat ${pend ? 'bad' : ''}"><div class="v">${pend}</div><div class="l">linhas não conferidas</div></div>
+        ${statHtml(RB.folhas.length, 'folhas', 'arquivo', '')}
+        ${statHtml(regs.length, 'recebimentos registrados', 'lista', 'violeta')}
+        ${statHtml(regs.reduce((a, l) => a + selbsDe(l.selb).length, 0), 'SELBs entregues', 'tag', 'ok')}
+        ${statHtml(pend, 'linhas não conferidas', 'alerta', pend ? 'bad' : '')}
       </div>
-      ${!RB.folhas.length ? '<p class="muted">Nenhuma folha ainda. Clique em "Importar folhas", escolha as fotos ou digitalizações e confira o que o OCR leu.</p>' : `
+      ${!RB.folhas.length ? vazioHtml('caixa', 'Nenhuma folha ainda', 'Clique em "Importar folhas", escolha as fotos, digitalizações ou PDFs e confira o que o OCR leu.') : `
       <div class="tablewrap" style="max-height:34vh"><table class="clickable"><thead><tr><th class="nosort">Folha</th><th class="nosort">Data</th><th class="nosort">Linhas</th><th class="nosort">Conferência</th><th class="nosort">Importada em</th></tr></thead><tbody>
       ${RB.folhas.map(f => `<tr data-folha="${esc(f.id)}"><td><b>${esc(f.titulo || f.id)}</b><br><small class="mono">${esc(f.id)}</small></td>
         <td class="t">${f.dataFolha ? esc(f.dataFolha.split('-').reverse().join('/')) : '—'}</td><td>${f.total}</td>

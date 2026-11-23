@@ -84,7 +84,7 @@ async function renderLocais(editarId) {
     ${editando ? formLocal(editando) : ''}
     <div class="panel">
       <div class="head-row"><h2>Locais cadastrados</h2><button class="btn" id="lcNovo">Novo local</button></div>
-      ${!CAD.locais.length ? '<p class="muted">Nenhum local cadastrado. Cadastre com "Novo local" ou a partir dos locais usados nas entregas, abaixo.</p>' : `
+      ${!CAD.locais.length ? vazioHtml('local', 'Nenhum local cadastrado', 'Cadastre com "Novo local" ou a partir dos locais usados nas entregas, abaixo.') : `
       <div class="filters"><label>Buscar <input type="search" id="lcQ" value="${esc(CAD.qLocal)}" placeholder="nome, endereço, bairro..." style="min-width:260px"></label></div>
       <div class="tablewrap"><table><thead><tr><th class="nosort">Local</th><th class="nosort">Endereço</th><th class="nosort">Entregas</th><th class="nosort"></th></tr></thead><tbody id="lcLista"></tbody></table></div>`}
     </div>
@@ -204,8 +204,8 @@ async function renderSelbs() {
     <div class="panel">
       <div class="head-row"><h2>SELBs</h2></div>
       <div class="stats">
-        <div class="stat"><div class="v">${selbs.length}</div><div class="l">SELBs</div></div>
-        <div class="stat ${multi ? 'bad' : ''}"><div class="v">${multi}</div><div class="l">com mais de um local</div></div>
+        ${statHtml(selbs.length, 'SELBs', 'tag', '')}
+        ${statHtml(multi, 'com mais de um local', 'local', multi ? 'bad' : '')}
       </div>
       <p class="muted">SELB raramente muda de lugar: mais de um local costuma ser leitura errada. Use <b>usar em todas</b> no local certo, ou corrija/apague um SELB lido errado (ex.: “B7T7” no lugar de “B77”).</p>
       <div class="filters"><label>SELB <input type="search" id="sbQ" value="${esc(CAD.qSelb)}" placeholder="buscar SELB ou local" style="min-width:220px"></label>
@@ -216,7 +216,7 @@ async function renderSelbs() {
     const q = nrm(CAD.qSelb), qk = kSelb(CAD.qSelb);
     const lista = selbs.filter(s => (!CAD.soMulti || s.locais.size > 1) && (!q || kSelb(s.selb).includes(qk) || [...s.locais.values()].some(o => nrm(o.nome).includes(q))));
     $('#sbN').textContent = `${lista.length} de ${selbs.length}`;
-    $('#sbLista').innerHTML = !lista.length ? '<p class="muted">Nenhum SELB.</p>' : `<div class="tablewrap"><table><thead><tr><th class="nosort">SELB</th><th class="nosort">Entregas</th><th class="nosort">Locais</th><th class="nosort">Última entrega</th><th class="nosort"></th></tr></thead><tbody>
+    $('#sbLista').innerHTML = !lista.length ? vazioHtml('tag', 'Nenhum SELB', 'Os SELBs aparecem aqui conforme as folhas são importadas.') : `<div class="tablewrap"><table><thead><tr><th class="nosort">SELB</th><th class="nosort">Entregas</th><th class="nosort">Locais</th><th class="nosort">Última entrega</th><th class="nosort"></th></tr></thead><tbody>
       ${lista.slice(0, 1000).map(s => {
         const locs = [...s.locais.values()].sort((a, b) => b.n - a.n);
         return `<tr class="${s.locais.size > 1 ? 'rb-multi' : ''}"><td><b>${esc(s.selb)}</b>${s.locais.size > 1 ? ' <span class="badge warn">mais de um local</span>' : ''}</td>
@@ -287,10 +287,10 @@ async function renderTreino() {
         Leituras que já foram corrigidas da mesma forma passam a ser corrigidas sozinhas na próxima folha (com aviso, e dá para voltar ao lido).
         SELB bem formado nunca é trocado. Ficam guardados só os recortes dessas três células — CPF, nome e assinatura nunca entram.</p>
       <div class="stats">
-        <div class="stat"><div class="v">${T.total}</div><div class="l">exemplos conferidos</div></div>
-        <div class="stat"><div class="v">${pct(tot[0], tot[1])}</div><div class="l">lidos certo pelo OCR</div></div>
-        <div class="stat"><div class="v">${T.regras.length}</div><div class="l">correções aprendidas</div></div>
-        <div class="stat"><div class="v">${T.comImagem}</div><div class="l">com recorte da imagem</div></div>
+        ${statHtml(T.total, 'exemplos conferidos', 'lista', '')}
+        ${statHtml(pct(tot[0], tot[1]), 'lidos certo pelo OCR', 'check', 'ok')}
+        ${statHtml(T.regras.length, 'correções aprendidas', 'cerebro', 'violeta')}
+        ${statHtml(T.comImagem, 'com recorte da imagem', 'imagem', '')}
       </div>
     </div>
     <div class="panel">

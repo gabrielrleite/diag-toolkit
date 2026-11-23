@@ -9,38 +9,52 @@
 <link rel="stylesheet" href="report.css">
 </head>
 <body>
-<header class="top noprint">
+<div class="shell">
+<aside class="side noprint" aria-label="Menu">
   <a class="brand" href="#" data-mod="coletas">
     <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b7cfa"/><stop offset="1" stop-color="#3b3fc4"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#lg)"/><path d="M7 17h4l2.2-5 3.6 10 2.4-6.5 1.3 1.5H25" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     <span class="nome"><strong>Central diag</strong><span class="muted">manutenção e patrimônio de TI</span></span>
   </a>
   <nav class="mods">
-    <a href="#" data-mod="coletas" class="on">Remoção de hardware</a>
-    <a href="#laudos" data-mod="laudos">Laudos de manutenção</a>
-    <a href="#equip" data-mod="equip">Equipamentos</a>
-    <a href="#receb" data-mod="receb">Recebimentos</a>
-    <a href="download/" class="ext">Downloads</a>
+    <span class="mods-tit">Módulos</span>
+    <a href="#" data-mod="coletas" class="on"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-chip"/></svg><span>Remoção de hardware</span></a>
+    <a href="#laudos" data-mod="laudos"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-doc"/></svg><span>Laudos de manutenção</span></a>
+    <a href="#equip" data-mod="equip"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-monitor"/></svg><span>Equipamentos</span></a>
+    <a href="#receb" data-mod="receb"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-caixa"/></svg><span>Recebimentos</span></a>
+    <span class="mods-tit">Ferramentas</span>
+    <a href="download/" class="ext"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-download"/></svg><span>Downloads</span></a>
   </nav>
+  <div class="side-pe">
+    <button type="button" class="btn ghost tema-btn" data-tema-btn aria-label="Tema"></button>
+    <span class="muted">Tema</span>
+  </div>
+</aside>
+<div class="conteudo">
+<header class="top noprint">
+  <div class="pg">
+    <span class="pg-ic" id="pgIcone"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-chip"/></svg></span>
+    <div><h1 id="pgTitulo">Remoção de hardware</h1><p id="pgSub">Coletas do diag-hardware: linha do tempo, saúde e relatório técnico</p></div>
+  </div>
   <div class="actions" id="act-coletas">
     <button id="btnHome" class="btn ghost" hidden>Coletas</button>
-    <label class="btn">Abrir .zip
+    <label class="btn"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-upload"/></svg>Abrir .zip
       <input id="inZip" type="file" accept=".zip,.txt" multiple hidden>
     </label>
-    <label class="btn ghost">Abrir pasta
+    <label class="btn ghost"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-pasta"/></svg>Abrir pasta
       <input id="inDir" type="file" webkitdirectory multiple hidden>
     </label>
-    <button id="btnPrint" class="btn ghost" disabled>Imprimir relatório</button>
+    <button id="btnPrint" class="btn ghost" disabled><svg class="ic" aria-hidden="true"><use href="icones.svg#i-impressora"/></svg>Imprimir relatório</button>
   </div>
-  <button type="button" class="btn ghost tema-btn" data-tema-btn aria-label="Tema"></button>
 </header>
 
 <main class="noprint-main">
  <div id="mod-coletas">
   <section id="home">
-    <div class="panel dl-banner"><div><b>Scripts</b> · diagnóstico do computador (manutenção), remoção de hardware e Agente diag, já configurados para este servidor.</div>
+    <div class="panel dl-banner"><span class="dl-ic"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-download"/></svg></span><div><b>Scripts prontos para este servidor</b><br><span class="muted">Diagnóstico do computador (manutenção), remoção de hardware e Agente diag, já configurados para enviar as coletas para cá.</span></div>
       <a class="btn" href="download/">Downloads</a></div>
     <div id="server" class="panel" hidden></div>
     <div id="drop" class="drop">
+      <span class="drop-ic"><svg class="ic" aria-hidden="true"><use href="icones.svg#i-arquivo"/></svg></span>
       <h1>Arraste aqui o .zip da coleta</h1>
       <p>Pode arrastar junto o arquivo <code>.zip.sha256.txt</code> para conferir a integridade do pacote.</p>
       <p class="muted">Arquivos abertos por aqui são lidos só neste navegador.</p>
@@ -74,6 +88,8 @@
  <div id="mod-equip" hidden></div>
  <div id="mod-receb" hidden></div>
 </main>
+</div>
+</div>
 
 <div id="dropOverlay" class="overlay noprint" hidden>Solte para abrir</div>
 <script src="app.js"></script>

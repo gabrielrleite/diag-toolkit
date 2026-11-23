@@ -8,24 +8,38 @@
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
-<header class="top">
+<div class="shell">
+<aside class="side" aria-label="Menu">
   <a class="brand" href="../">
     <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b7cfa"/><stop offset="1" stop-color="#3b3fc4"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#lg)"/><path d="M7 17h4l2.2-5 3.6 10 2.4-6.5 1.3 1.5H25" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     <span class="nome"><strong>Central diag</strong><span class="muted">manutenção e patrimônio de TI</span></span>
   </a>
   <nav class="mods">
-    <a href="../">Remoção de hardware</a>
-    <a href="../#laudos">Laudos de manutenção</a>
-    <a href="../#equip">Equipamentos</a>
-    <a href="../#receb">Recebimentos</a>
-    <a href="./" class="on">Downloads</a>
+    <span class="mods-tit">Módulos</span>
+    <a href="../"><svg class="ic" aria-hidden="true"><use href="../icones.svg#i-chip"/></svg><span>Remoção de hardware</span></a>
+    <a href="../#laudos"><svg class="ic" aria-hidden="true"><use href="../icones.svg#i-doc"/></svg><span>Laudos de manutenção</span></a>
+    <a href="../#equip"><svg class="ic" aria-hidden="true"><use href="../icones.svg#i-monitor"/></svg><span>Equipamentos</span></a>
+    <a href="../#receb"><svg class="ic" aria-hidden="true"><use href="../icones.svg#i-caixa"/></svg><span>Recebimentos</span></a>
+    <span class="mods-tit">Ferramentas</span>
+    <a href="./" class="on"><svg class="ic" aria-hidden="true"><use href="../icones.svg#i-download"/></svg><span>Downloads</span></a>
   </nav>
-  <button type="button" class="btn ghost tema-btn" data-tema-btn aria-label="Tema"></button>
+  <div class="side-pe">
+    <button type="button" class="btn ghost tema-btn" data-tema-btn aria-label="Tema"></button>
+    <span class="muted">Tema</span>
+  </div>
+</aside>
+<div class="conteudo">
+<header class="top">
+  <div class="pg">
+    <span class="pg-ic"><svg class="ic" aria-hidden="true"><use href="../icones.svg#i-download"/></svg></span>
+    <div><h1>Downloads</h1><p>Scripts de coleta e Agente diag, já configurados para este servidor</p></div>
+  </div>
 </header>
 
 <main>
   <div class="dl-grid">
     <section class="dl-card">
+      <span class="dl-ic"><svg class="ic" aria-hidden="true"><use href="../icones.svg#i-pulso"/></svg></span>
       <h3>Diagnóstico do computador</h3>
       <p class="muted" style="margin:0">Para manutenção: saúde dos discos, memória, vídeo, telas azuis, erros de hardware,
         dispositivos com problema, serviços, impressoras, rede (gateway, DNS, domínio, internet), ativação, antivírus e programas.
@@ -44,6 +58,7 @@
     </section>
 
     <section class="dl-card">
+      <span class="dl-ic"><svg class="ic" aria-hidden="true"><use href="../icones.svg#i-chip"/></svg></span>
       <h3>Remoção de hardware</h3>
       <p class="muted" style="margin:0">Histórico de dispositivos (instalação, chegada, remoção), ligações e desligamentos,
         eventos de PnP e logons, com cópia dos logs do Windows. Inclui também os dados de saúde.</p>
@@ -58,6 +73,7 @@
     </section>
 
     <section class="dl-card">
+      <span class="dl-ic"><svg class="ic" aria-hidden="true"><use href="../icones.svg#i-escudo"/></svg></span>
       <h3>Agente diag (assinatura de laudos)</h3>
       <p class="muted" style="margin:0">Só para quem assina laudos com certificado digital instalado no PC
         (A1 ou token A3). Instala uma vez por usuário do Windows.</p>
@@ -81,6 +97,8 @@
   </div>
   <p id="msg" class="err" hidden></p>
 </main>
+</div>
+</div>
 
 <script src="download.js"></script>
 </body>
