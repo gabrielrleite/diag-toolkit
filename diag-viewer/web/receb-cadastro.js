@@ -9,7 +9,7 @@
   Depende de app.js (esc, api, fmt), laudos.js (needServer) e recebimentos.js (RB, RecebOCR).
 */
 
-const CAD = { locais: [], qLocal: '', qSelb: '', soMulti: false };
+const CAD = { locais: [], qLocal: '', qSelb: '', soMulti: false, soSemCad: false };
 const nrm = t => RecebOCR.normalizar(t);
 const kSelb = t => RecebOCR.normalizar(t).replace(/ /g, '');
 
@@ -183,50 +183,72 @@ function ligarFormLocal(L) {
 }
 
 // ================================================================== aba SELBs
-async function renderSelbs() {
+async function renderSelbs(editar = '') {
   const el = $('#mod-receb');
   el.innerHTML = abasReceb('selbs') + '<div class="panel">Carregando...</div>';
   if (!(await needServer(el))) return;
-  const [regs] = await Promise.all([carregarEntregas(), carregarLocais()]);
+  const [regs, , cads] = await Promise.all([carregarEntregas(), carregarLocais(), carregarSelbsCad()]);
   const mapa = new Map();
+  const novoS = sel => ({ selb: sel.toUpperCase(), n: 0, locais: new Map(), ult: null, itens: new Map() });
   // uma entrega com vários SELBs conta para cada um deles
   for (const l of regs) for (const sel of RecebOCR.separarSelbs(l.selb)) {
-    const k = kSelb(sel), s = mapa.get(k) || { selb: sel.toUpperCase(), n: 0, locais: new Map(), ult: null };
+    const k = kSelb(sel), s = mapa.get(k) || novoS(sel);
     s.n++;
     if (l.local) { const lk = nrm(l.local), o = s.locais.get(lk) || { nome: l.local, n: 0 }; o.n++; s.locais.set(lk, o); }
     if (!s.ult || (l.dataIso || '') > (s.ult.dataIso || '')) s.ult = l;
+    for (const it of l.itens || []) if (kSelb(it.selb) === k) { const key = it.item + '|' + it.tipo; s.itens.set(key, (s.itens.get(key) || 0) + it.qtd); }
     mapa.set(k, s);
   }
+  for (const c of cads) if (!mapa.has(kSelb(c.selb))) mapa.set(kSelb(c.selb), novoS(c.selb)); // cadastrado, ainda sem entrega
   const selbs = [...mapa.values()].sort((a, b) => a.selb.localeCompare(b.selb, 'pt-BR', { numeric: true }));
-  const multi = selbs.filter(s => s.locais.size > 1).length;
+  const multi = selbs.filter(s => s.locais.size > 1).length, semCad = selbs.filter(s => !cadSelb(s.selb)).length;
+  const totItens = selbs.reduce((a, s) => a + [...s.itens.values()].reduce((b, q) => b + q, 0), 0);
   const nomesSug = [...new Set([...CAD.locais.map(L => L.nome), ...regs.map(l => l.local).filter(Boolean)])].sort();
+  const editando = editar ? (cadSelb(editar) || { selb: editar === 'novo' ? '' : editar.toUpperCase(), novo: true }) : null;
   el.innerHTML = abasReceb('selbs') + `
+    ${editando ? formSelb(editando, mapa.get(kSelb(editando.selb || ''))) : ''}
     <div class="panel">
-      <div class="head-row"><h2>SELBs</h2></div>
+      <div class="head-row"><h2>SELBs</h2><a class="btn" href="#receb/selbs~novo">${IC('mais')}Cadastrar SELB</a></div>
       <div class="stats">
         ${statHtml(selbs.length, 'SELBs', 'tag', '')}
+        ${statHtml(selbs.length - semCad, 'com cadastro', 'monitor', 'ok')}
+        ${statHtml(totItens, 'tintas, toners e caixas entregues', 'caixa', 'violeta')}
         ${statHtml(multi, 'com mais de um local', 'local', multi ? 'bad' : '')}
       </div>
-      <p class="muted">SELB raramente muda de lugar: mais de um local costuma ser leitura errada. Use <b>usar em todas</b> no local certo, ou corrija/apague um SELB lido errado (ex.: “B7T7” no lugar de “B77”).</p>
-      <div class="filters"><label>SELB <input type="search" id="sbQ" value="${esc(CAD.qSelb)}" placeholder="buscar SELB ou local" style="min-width:220px"></label>
-        <label class="chk"><input type="checkbox" id="sbMulti" ${CAD.soMulti ? 'checked' : ''}> só com mais de um local</label><span class="muted" id="sbN"></span></div>
+      <p class="muted">Cada SELB é uma impressora ou scanner. No cadastro ficam o equipamento, se é colorida ou preto e branco, se usa <b>tinta ou toner</b>, as cores, a caixa de manutenção e os <b>códigos dos suprimentos</b> (observação).
+        SELB raramente muda de lugar: mais de um local costuma ser leitura errada (use <b>usar em todas</b> no local certo).</p>
+      <div class="filters"><label>Buscar <input type="search" id="sbQ" value="${esc(CAD.qSelb)}" placeholder="SELB, local, marca, modelo, código" style="min-width:260px"></label>
+        <label class="chk"><input type="checkbox" id="sbMulti" ${CAD.soMulti ? 'checked' : ''}> só com mais de um local</label>
+        <label class="chk"><input type="checkbox" id="sbSemCad" ${CAD.soSemCad ? 'checked' : ''}> só sem cadastro</label><span class="muted" id="sbN"></span></div>
       <div id="sbLista"></div>
     </div>`;
   const desenhar = () => {
     const q = nrm(CAD.qSelb), qk = kSelb(CAD.qSelb);
-    const lista = selbs.filter(s => (!CAD.soMulti || s.locais.size > 1) && (!q || kSelb(s.selb).includes(qk) || [...s.locais.values()].some(o => nrm(o.nome).includes(q))));
+    const lista = selbs.filter(s => {
+      const c = cadSelb(s.selb);
+      if (CAD.soMulti && s.locais.size <= 1) return false;
+      if (CAD.soSemCad && c) return false;
+      return !q || kSelb(s.selb).includes(qk) || [...s.locais.values()].some(o => nrm(o.nome).includes(q)) || (c && nrm([c.marca, c.modelo, c.serie, c.obs].join(' ')).includes(q));
+    });
     $('#sbN').textContent = `${lista.length} de ${selbs.length}`;
-    $('#sbLista').innerHTML = !lista.length ? vazioHtml('tag', 'Nenhum SELB', 'Os SELBs aparecem aqui conforme as folhas são importadas.') : `<div class="tablewrap"><table><thead><tr><th class="nosort">SELB</th><th class="nosort">Entregas</th><th class="nosort">Locais</th><th class="nosort">Última entrega</th><th class="nosort"></th></tr></thead><tbody>
+    $('#sbLista').innerHTML = !lista.length ? vazioHtml('tag', 'Nenhum SELB', 'Os SELBs aparecem aqui conforme as folhas são importadas, ou cadastre um em "Cadastrar SELB".') : `<div class="tablewrap"><table><thead><tr><th class="nosort">SELB / equipamento</th><th class="nosort">Entregas</th><th class="nosort">Itens entregues</th><th class="nosort">Locais</th><th class="nosort">Última entrega</th><th class="nosort"></th></tr></thead><tbody>
       ${lista.slice(0, 1000).map(s => {
-        const locs = [...s.locais.values()].sort((a, b) => b.n - a.n);
-        return `<tr class="${s.locais.size > 1 ? 'rb-multi' : ''}"><td><b>${esc(s.selb)}</b>${s.locais.size > 1 ? ' <span class="badge warn">mais de um local</span>' : ''}</td>
-          <td><button class="linklike" data-ver="${esc(s.selb)}">${s.n}</button></td>
+        const locs = [...s.locais.values()].sort((a, b) => b.n - a.n), c = cadSelb(s.selb);
+        const itens = [...s.itens.entries()].map(([key, qtd]) => { const [item, tipo] = key.split('|'); return { selb: s.selb, item, tipo, qtd }; })
+          .sort((a, b) => Object.keys(ITENS).indexOf(a.item) - Object.keys(ITENS).indexOf(b.item));
+        return `<tr class="${s.locais.size > 1 ? 'rb-multi' : ''}">
+          <td><b>${esc(s.selb)}</b>${s.locais.size > 1 ? ' <span class="badge warn">mais de um local</span>' : ''}
+            <br>${c ? `<small>${esc(resumoEquip(c))}</small>${c.obs ? `<br><small class="it-obs" title="${esc(c.obs)}">${IC('tag')} ${esc(c.obs.slice(0, 70))}${c.obs.length > 70 ? '…' : ''}</small>` : ''}` : '<span class="badge">sem cadastro</span>'}</td>
+          <td>${s.n ? `<button class="linklike" data-ver="${esc(s.selb)}">${s.n}</button>` : '0'}</td>
+          <td>${itens.length ? itensHtml(itens, false) : '<span class="muted">—</span>'}</td>
           <td>${locs.map(o => `<div class="rb-loc">${esc(o.nome)} <small>(${o.n})</small>${localCadastrado(o.nome) ? '' : ' <span class="badge warn" title="Local sem cadastro">?</span>'}
             ${s.locais.size > 1 ? `<button class="linklike" data-todas="${esc(s.selb)}" data-loc="${esc(o.nome)}">usar em todas</button>` : ''}</div>`).join('') || '—'}</td>
-          <td class="t">${esc(s.ult.data || '—')}<br><small>${esc(s.ult.local || '')}</small></td>
-          <td class="acoes"><button class="btn ghost small" data-corrsel="${esc(s.selb)}">Corrigir SELB…</button>
-            <button class="btn ghost small" data-corrloc="${esc(s.selb)}">Trocar local…</button>
-            <button class="btn ghost small perigo" data-apagasel="${esc(s.selb)}">Apagar</button></td></tr>`;
+          <td class="t">${s.ult ? `${esc(s.ult.data || '—')}<br><small>${esc(s.ult.local || '')}</small>` : '—'}</td>
+          <td class="acoes"><a class="btn small" href="#receb/selbs~${encodeURIComponent(s.selb)}">${c ? 'Cadastro' : 'Cadastrar'}</a>
+            ${s.n ? `<details class="menu-acoes"><summary class="btn ghost small" title="Mais ações">⋯</summary><div>
+              <button class="btn ghost small" data-corrsel="${esc(s.selb)}">Corrigir SELB…</button>
+              <button class="btn ghost small" data-corrloc="${esc(s.selb)}">Trocar local…</button>
+              <button class="btn ghost small perigo" data-apagasel="${esc(s.selb)}">Apagar das entregas</button></div></details>` : ''}</td></tr>`;
       }).join('')}</tbody></table></div>`;
     const box = $('#sbLista');
     box.querySelectorAll('[data-ver]').forEach(b => b.addEventListener('click', () => { RB.fSelb = b.dataset.ver; RB.fLocal = ''; RB.q = ''; location.hash = 'receb'; }));
@@ -240,7 +262,7 @@ async function renderSelbs() {
     }));
     box.querySelectorAll('[data-corrloc]').forEach(b => b.addEventListener('click', async () => {
       const s = mapa.get(kSelb(b.dataset.corrloc));
-      const para = await pedirValor({ titulo: `Local do SELB ${s.selb}`, rotulo: 'Local certo', texto: 'Coloca este local em todas as entregas deste SELB.', valor: s.ult.local || '', sugestoes: nomesSug });
+      const para = await pedirValor({ titulo: `Local do SELB ${s.selb}`, rotulo: 'Local certo', texto: 'Coloca este local em todas as entregas deste SELB.', valor: s.ult ? s.ult.local || '' : '', sugestoes: nomesSug });
       if (para === null) return;
       let n = 0;
       for (const o of s.locais.values()) if (nrm(o.nome) !== nrm(para) || o.nome !== para) { const r = await corrigirLote('local', o.nome, para, s.selb); if (!r) return; n += r.linhas; }
@@ -248,21 +270,92 @@ async function renderSelbs() {
     }));
     box.querySelectorAll('[data-corrsel]').forEach(b => b.addEventListener('click', async () => {
       const de = b.dataset.corrsel;
-      const para = await pedirValor({ titulo: 'Corrigir SELB', rotulo: 'SELB certo', texto: `Troca o SELB “${esc(de)}” em todas as entregas.`, valor: de, sugestoes: selbs.map(s => s.selb).filter(v => kSelb(v) !== kSelb(de)) });
+      const para = await pedirValor({ titulo: 'Corrigir SELB', rotulo: 'SELB certo', texto: `Troca o SELB “${esc(de)}” em todas as entregas (os itens e o cadastro vão junto).`, valor: de, sugestoes: selbs.map(s => s.selb).filter(v => kSelb(v) !== kSelb(de)) });
       if (para === null || para.toUpperCase() === de) return;
       const r = await corrigirLote('selb', de, para);
       if (r) { alert(`${r.linhas} entrega(s) corrigida(s).`); renderSelbs(); }
     }));
     box.querySelectorAll('[data-apagasel]').forEach(b => b.addEventListener('click', async () => {
       const de = b.dataset.apagasel;
-      if (!confirm(`Apagar o SELB “${de}” de todas as entregas? O campo fica vazio e a linha volta para conferência.`)) return;
+      if (!confirm(`Apagar o SELB “${de}” de todas as entregas? O campo fica vazio, os itens desse SELB saem e a linha volta para conferência. (O cadastro do SELB não é apagado.)`)) return;
       const r = await corrigirLote('selb', de, '');
       if (r) { alert(`SELB apagado de ${r.linhas} entrega(s).`); renderSelbs(); }
     }));
   };
   $('#sbQ').addEventListener('input', e => { CAD.qSelb = e.target.value; desenhar(); });
   $('#sbMulti').addEventListener('change', e => { CAD.soMulti = e.target.checked; desenhar(); });
+  $('#sbSemCad').addEventListener('change', e => { CAD.soSemCad = e.target.checked; desenhar(); });
+  if (editando) ligarFormSelb(editando);
   desenhar();
+}
+
+// formulário do cadastro de um SELB (impressora/scanner)
+function formSelb(c, uso) {
+  const cores = c.cores || ['preto', 'azul', 'magenta', 'amarelo'], cor = c.cor || 'colorida', sup = c.suprimento || 'tinta';
+  const radio = (nome, valor, rot, atual) => `<label class="seg-op"><input type="radio" name="${nome}" value="${valor}" ${atual === valor ? 'checked' : ''}><span>${rot}</span></label>`;
+  return `<div class="panel" id="sbForm">
+    <div class="head-row"><h2>${c.novo ? 'Cadastrar SELB' : 'Cadastro do SELB ' + esc(c.selb)}</h2>
+      ${uso && uso.n ? `<span class="muted">${uso.n} entrega(s) registrada(s)</span>` : ''}</div>
+    <div class="rep-grid">
+      <label>SELB <input id="sfSelb" value="${esc(c.selb)}" maxlength="40" ${c.novo ? '' : 'readonly'} placeholder="ex.: A1234"></label>
+      <label>Tipo <select id="sfTipo">${Object.entries(TIPO_EQUIP_TXT).map(([k, t]) => `<option value="${k}" ${c.tipo === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label>Marca <input id="sfMarca" value="${esc(c.marca || '')}" maxlength="80" placeholder="ex.: Epson"></label>
+      <label>Modelo <input id="sfModelo" value="${esc(c.modelo || '')}" maxlength="120" placeholder="ex.: L6270"></label>
+      <label>Nº de série <input id="sfSerie" value="${esc(c.serie || '')}" maxlength="80"></label>
+    </div>
+    <div class="sf-grupos">
+      <div><span class="lbl">Impressão</span><div class="seg2">${radio('sfCor', 'colorida', 'Colorida', cor)}${radio('sfCor', 'pb', 'Preto e branco', cor)}</div></div>
+      <div><span class="lbl">Suprimento</span><div class="seg2">${radio('sfSup', 'tinta', 'Tinta', sup)}${radio('sfSup', 'toner', 'Toner', sup)}${radio('sfSup', 'nenhum', 'Nenhum (scanner)', sup)}</div></div>
+      <div><span class="lbl">Cores usadas</span><div class="it-chips" id="sfCores">
+        ${['preto', 'azul', 'magenta', 'amarelo'].map(k => `<label class="it-chip ${cores.includes(k) ? 'on' : ''}"><input type="checkbox" value="${k}" ${cores.includes(k) ? 'checked' : ''}><span class="it-bola it-${k}"></span>${ITENS[k]}</label>`).join('')}</div></div>
+      <div><span class="lbl">Manutenção</span><div class="it-chips"><label class="it-chip ${c.caixa ? 'on' : ''}"><input type="checkbox" id="sfCaixa" ${c.caixa ? 'checked' : ''}><span class="it-bola it-caixa">${IC('caixa')}</span>Usa caixa de manutenção</label></div></div>
+    </div>
+    <label class="full">Observação — códigos das tintas/toners e da caixa
+      <textarea id="sfObs" rows="3" maxlength="2000" placeholder="ex.: Tinta T544120 (preto), T544220 (azul), T544320 (magenta), T544420 (amarelo) · Caixa C9345">${esc(c.obs || '')}</textarea></label>
+    <div class="dlg-actions">${c.novo ? '' : '<button class="btn ghost perigo" id="sfExcluir">Excluir cadastro</button>'}<a class="btn ghost" href="#receb/selbs">Cancelar</a><button class="btn" id="sfSalvar">Salvar cadastro</button></div>
+  </div>`;
+}
+function ligarFormSelb(c) {
+  const f = $('#sbForm');
+  f.scrollIntoView({ block: 'start' });
+  const atualizar = () => {
+    const pb = f.querySelector('input[name="sfCor"]:checked').value === 'pb', nenhum = f.querySelector('input[name="sfSup"]:checked').value === 'nenhum';
+    f.querySelectorAll('#sfCores input').forEach(cb => {
+      if (pb) cb.checked = cb.value === 'preto';
+      if (nenhum) cb.checked = false;
+      cb.disabled = nenhum || (pb && cb.value !== 'preto');
+      cb.closest('.it-chip').classList.toggle('on', cb.checked);
+      cb.closest('.it-chip').classList.toggle('off', cb.disabled);
+    });
+  };
+  f.querySelectorAll('input[name="sfCor"], input[name="sfSup"]').forEach(r => r.addEventListener('change', () => {
+    // voltou para colorida: marca as 4 cores
+    if (r.name === 'sfCor' && r.value === 'colorida') f.querySelectorAll('#sfCores input').forEach(cb => { cb.checked = true; });
+    atualizar();
+  }));
+  f.querySelectorAll('.it-chip input[type="checkbox"]').forEach(cb => cb.addEventListener('change', () => cb.closest('.it-chip').classList.toggle('on', cb.checked)));
+  atualizar();
+  $('#sfSalvar').addEventListener('click', async e => {
+    const selb = $('#sfSelb').value.trim().toUpperCase();
+    if (!selb || RecebOCR.separarSelbs(selb).length !== 1) { alert('Informe um SELB (um só).'); return $('#sfSelb').focus(); }
+    const corpo = {
+      tipo: $('#sfTipo').value, marca: $('#sfMarca').value, modelo: $('#sfModelo').value, serie: $('#sfSerie').value,
+      cor: f.querySelector('input[name="sfCor"]:checked').value, suprimento: f.querySelector('input[name="sfSup"]:checked').value,
+      cores: [...f.querySelectorAll('#sfCores input:checked')].map(cb => cb.value), caixa: $('#sfCaixa').checked, obs: $('#sfObs').value,
+    };
+    e.target.disabled = true;
+    const r = await api('api/receb-selbs/' + encodeURIComponent(selb), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }).catch(() => null);
+    e.target.disabled = false;
+    if (!r || !r.ok) { const er = r ? (await r.json().catch(() => ({}))).erro : ''; return alert('Não foi possível salvar: ' + (er || 'servidor indisponível.')); }
+    RB.vocab = null;
+    location.hash = 'receb/selbs';
+  });
+  if ($('#sfExcluir')) $('#sfExcluir').addEventListener('click', async () => {
+    if (!confirm(`Excluir o cadastro do SELB ${c.selb}? As entregas não são alteradas.`)) return;
+    const r = await api('api/receb-selbs/' + encodeURIComponent(c.selb), { method: 'DELETE' }).catch(() => null);
+    if (!r || !r.ok) return alert('Não foi possível excluir.');
+    RB.vocab = null; location.hash = 'receb/selbs';
+  });
 }
 
 // ================================================================== aba Treinamento
@@ -336,3 +429,8 @@ async function renderTreino() {
     RB.vocab = null; renderTreino();
   });
 }
+
+// fecha o menu "⋯" ao clicar fora dele
+document.addEventListener('click', e => {
+  document.querySelectorAll('.menu-acoes[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; });
+});
