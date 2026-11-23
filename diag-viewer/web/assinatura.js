@@ -192,7 +192,7 @@ async function gerarPdfLaudo(L, { modo = 'digital' } = {}) {
     fech.push({ columns: [linha(a1.cargo, a1.nome, a1.extra), a2 ? linha(a2.cargo, a2.nome, a2.extra) : { width: 245, text: '' }], columnGap: 25, margin: [0, 6, 0, 0] });
   }
   fech.push({ canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 0.5, lineColor: PDF_COR.line }], margin: [0, 16, 0, 4] });
-  fech.push({ text: `${M.rotuloNumero} ${L.numero}, revisão ${L.revisao} · modelo "${M.nome}" · gerado em ${fmt(new Date())} pelo Visualizador de Coletas (diag-hardware)`, style: 'small', alignment: 'center' });
+  fech.push({ text: `${M.rotuloNumero} ${L.numero}, revisão ${L.revisao} · modelo "${M.nome}" · gerado em ${fmt(new Date())} pela Central diag`, style: 'small', alignment: 'center' });
   fech.forEach((n, i) => { if (!n.id) n.id = 'fech' + i; });
   const primeiroFech = fech[0].id;
   content.push(...fech);
@@ -216,7 +216,7 @@ async function gerarPdfLaudo(L, { modo = 'digital' } = {}) {
     info: {
       title: `${M.titulo} ${L.numero}`, author: rep.orgao || 'Tecnologia da Informação',
       subject: `laudo:${L.id};rev:${L.revisao}`, keywords: `diag-viewer laudo:${L.id} rev:${L.revisao}`,
-      creator: 'Visualizador de Coletas (diag-hardware)', producer: 'diag-viewer',
+      creator: 'Central diag', producer: 'diag-viewer',
     },
     defaultStyle: { font: 'Roboto', fontSize: 9.5, lineHeight: 1.2, color: PDF_COR.ink },
     styles: {

@@ -42,7 +42,7 @@ function showModule(mod) {
   $('#mod-equip').hidden = mod !== 'equip';
   $('#mod-receb').hidden = mod !== 'receb';
   $('#act-coletas').hidden = mod !== 'coletas';
-  document.title = { coletas: 'Remoção de hardware', laudos: 'Laudos de manutenção', equip: 'Equipamentos', receb: 'Recebimentos' }[mod] + ' · Visualizador';
+  document.title = { coletas: 'Remoção de hardware', laudos: 'Laudos de manutenção', equip: 'Equipamentos', receb: 'Recebimentos' }[mod] + ' · Central diag';
 }
 
 async function route() {
@@ -635,7 +635,7 @@ function renderLaudoPaper() {
     <div class="r-signs">${assin.map(s => `<div class="r-sign-block">
       <div class="r-sign-name">${esc(s.nome) || '&nbsp;'}</div><div class="r-sign-role">${esc(s.cargo)}</div><div class="r-small">${s.extra || '&nbsp;'}</div></div>`).join('')}</div>
     </div>
-    <div class="r-foot r-small">${esc(M.rotuloNumero)} ${esc(L.numero || '(não salvo)')}${L.revisao ? ', revisão ' + L.revisao : ''} · modelo "${esc(M.nome)}" · gerado em ${fmt(new Date())} pelo Visualizador de Coletas (diag-hardware)</div>
+    <div class="r-foot r-small">${esc(M.rotuloNumero)} ${esc(L.numero || '(não salvo)')}${L.revisao ? ', revisão ' + L.revisao : ''} · modelo "${esc(M.nome)}" · gerado em ${fmt(new Date())} pela Central diag</div>
     ${secOn(M, 'anexos') && LD.anexos.length ? `<section class="r-anexos"><h2>Reprodução dos anexos</h2>${LD.anexos.map((a, n) => `<figure class="r-anexo">
       <figcaption><b>Anexo ${n + 1}</b>${a.legenda ? ' – ' + esc(a.legenda) : ''}</figcaption>
       ${a.tipo.startsWith('image/') ? `<img src="${esc(a.url)}" alt="Anexo ${n + 1}">` : `<div class="r-pdf">Documento PDF entregue em separado: <b>${esc(a.nome)}</b></div>`}

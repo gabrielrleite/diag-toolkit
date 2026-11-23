@@ -1,6 +1,6 @@
 'use strict';
 /*
-  Visualizador de coletas do diag-hardware.ps1
+  Central diag: análise das coletas do diag-hardware.ps1 e do diagnostico.ps1
   Tudo roda no navegador: o .zip nunca sai desta maquina.
 */
 
@@ -976,7 +976,7 @@ function renderRelatorio() {
       <div class="r-sign-date">${esc(rep.cidade || '__________________')}, ${rep.data ? esc(dataExtenso(rep.data)) : '____ / ____ / ________'}</div>
     </footer>
     </div>
-    <div class="r-foot r-small">Gerado em ${fmt(now)} pelo Visualizador de Coletas (diag-hardware) <br>SHA-256 do pacote: <span class="r-mono">${state.zip ? state.zip.hash : '—'}</span></div>
+    <div class="r-foot r-small">Gerado em ${fmt(now)} pela Central diag <br>SHA-256 do pacote: <span class="r-mono">${state.zip ? state.zip.hash : '—'}</span></div>
     ${state.anexos.length ? `<section class="r-anexos"><h2>Reprodução dos anexos</h2>${state.anexos.map((a, n) => `<figure class="r-anexo">
       <figcaption><b>Anexo ${n + 1}</b>${a.legenda ? ' – ' + esc(a.legenda) : ''}</figcaption>
       ${a.tipo.startsWith('image/') ? `<img src="${esc(a.url)}" alt="Anexo ${n + 1}">` : `<div class="r-pdf">Documento PDF entregue em separado: <b>${esc(a.nome)}</b></div>`}

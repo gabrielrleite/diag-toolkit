@@ -1,6 +1,6 @@
 'use strict';
 /*
-  Servidor do Visualizador de Coletas (diag-hardware)
+  Servidor da Central diag (coletas, laudos, equipamentos e recebimentos)
   - Serve a interface web (pasta web/)
   - POST /api/coletas           recebe o .zip enviado pelo script (token obrigatorio)
   - GET  /api/coletas           lista as coletas recebidas
@@ -1182,7 +1182,7 @@ const server = http.createServer(async (req, res) => {
 server.requestTimeout = 15 * 60 * 1000;
 seedModelos().catch(e => console.error('modelos:', e.message));
 server.listen(PORT, () => {
-  console.log(`Visualizador ouvindo na porta ${PORT}. Dados em ${DATA}`);
+  console.log(`Central diag ouvindo na porta ${PORT}. Dados em ${DATA}`);
   if (!UPLOAD_TOKEN) console.warn('AVISO: UPLOAD_TOKEN não definido. O recebimento de coletas está DESATIVADO.');
   if (!READ_TOKEN) console.warn('AVISO: READ_TOKEN não definido. Qualquer um na rede pode listar e baixar as coletas.');
 });

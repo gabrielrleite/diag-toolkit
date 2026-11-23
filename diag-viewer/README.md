@@ -1,4 +1,6 @@
-# Visualizador de Coletas (diag-hardware)
+# Central diag (diag-viewer)
+
+Interface web para manutenção e patrimônio de TI. Tema claro, escuro ou automático (segue o sistema): botão no canto superior direito, a escolha fica salva no navegador.
 
 Três módulos:
 

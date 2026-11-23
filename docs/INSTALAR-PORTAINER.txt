@@ -36,7 +36,7 @@ Se o GitHub estiver fora do ar, usa a última versão baixada.
      VERSAO       = main   (opcional: branch ou tag a baixar)
 4. Deploy the stack. Conferir:
    - Containers > diag-viewer: "running" e depois "healthy".
-     Logs: "Código atualizado." e "Visualizador ouvindo na porta 8080".
+     Logs: "Código atualizado." e "Central diag ouvindo na porta 8080".
    - Containers > diag-viewer-permissoes-1: "exited (0)". É normal: ele só
      acerta as permissões dos volumes e termina.
    - Navegador: http://IP-DO-SERVIDOR  (pede o READ_TOKEN).
@@ -143,7 +143,7 @@ Environment variables:
 
 Deploy the stack. Conferir:
   - Containers > diag-viewer: "running" e depois "healthy".
-  - Logs: "Visualizador ouvindo na porta 8080. Dados em /data".
+  - Logs: "Central diag ouvindo na porta 8080. Dados em /data".
   - Navegador: http://IP-DO-SERVIDOR  (pede o READ_TOKEN).
 
 Docker do servidor em Windows: troque /opt/diag-viewer por C:/diag/diag-viewer.
