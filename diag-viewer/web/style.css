@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --bg: #f6f7f9;
   --panel: #ffffff;
   --ink: #1b1f24;
@@ -21,8 +22,9 @@
   --c-disp: #d97706;
   --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 }
+/* tema escuro: automático (sistema) ou escolhido no botão do topo (tema.js grava data-theme no <html>) */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #111418;
     --panel: #181c21;
     --ink: #e6e8eb;
@@ -43,7 +45,31 @@
     --c-pnp: #b197fc;
     --c-logon: #4cc38a;
     --c-disp: #f0b04a;
+    color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #111418;
+  --panel: #181c21;
+  --ink: #e6e8eb;
+  --muted: #98a2b3;
+  --line: #2a3038;
+  --accent: #6f9bff;
+  --accent-soft: #1d2a47;
+  --ok: #4cc38a;
+  --ok-soft: #12291f;
+  --warn: #f0b04a;
+  --warn-soft: #2d2410;
+  --bad: #ff6b6b;
+  --bad-soft: #2f1517;
+  --win: rgba(255, 107, 107, .14);
+  --c-boot: #6f9bff;
+  --c-desl: #98a2b3;
+  --c-falha: #ff6b6b;
+  --c-pnp: #b197fc;
+  --c-logon: #4cc38a;
+  --c-disp: #f0b04a;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -312,3 +338,6 @@ td.acoes .btn { margin-left: 4px; }
 .rb-loc { white-space: nowrap; }
 tr.rb-multi td { background: var(--warn-soft); }
 @media (max-width: 900px) { td.acoes { white-space: normal; } td.acoes .btn { margin: 2px 0; } }
+
+/* botão de tema no topo */
+.tema-btn { white-space: nowrap; }

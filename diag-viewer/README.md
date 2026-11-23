@@ -1,4 +1,6 @@
-# Visualizador de Coletas (diag-hardware)
+# Central diag (diag-viewer)
+
+Interface web para manutenção e patrimônio de TI. Tema claro, escuro ou automático (segue o sistema): botão no canto superior direito, a escolha fica salva no navegador.
 
 Três módulos:
 
@@ -19,6 +21,7 @@ Três módulos:
   - Na tela aparecem só **Local, SELB e Data**: o OCR ([Tesseract.js](https://github.com/naptha/tesseract.js), português, embutido em `web/vendor/tesseract`, sem internet) lê essas colunas nas células com escrita, e tudo pode ser corrigido à mão. A imagem é lida no navegador; vai ao servidor só ao salvar.
   - CPF e nome/assinatura **não são digitados**: ao abrir o item, cada linha mostra a foto da linha na folha (clique para ampliar) e há o botão *Foto original*. Linha preenchida só com nome/assinatura também é registrada.
   - Ajuda para letra cursiva: a leitura de Local e SELB é comparada com os valores já cadastrados e corrigida pelo mais parecido (com aviso e opção de voltar ao que o OCR leu); leitura muito incerta fica vazia com a dica "ilegível", em vez de texto errado. Autocompletar com os valores já usados, *Preencher datas vazias* com a data da folha e Enter para ir ao próximo campo.
+  - **Vários SELBs na mesma entrega**: separe com vírgula (também aceita `;`, `+`, " e " ou espaço entre códigos completos): `A123, A124`. O campo é normalizado para maiúsculas e sem repetidos, mostra a quantidade ("3 SELBs"), e cada SELB conta separadamente no histórico, nos filtros, na aba SELBs e no CSV (coluna *Qtd SELB*). Corrigir ou apagar um SELB em lote mexe só nele, mantendo os outros da entrega.
   - **Local pelo histórico do SELB**: se o SELB já tem entregas registradas, o local da última entrega preenche o campo quando ele está vazio ou a leitura é duvidosa (aviso "preenchido pelo histórico", com opção de voltar ao lido). Se o OCR leu outro local com boa confiança, o histórico aparece só como sugestão (*usar*). Vale também ao digitar ou corrigir o SELB; o local continua editável.
   - Data inválida e leitura com confiança < 60% ficam em vermelho. Cada linha tem *conferida*.
   - Controle: filtros por **SELB** e por **Local** (com sugestões, sem diferenciar acentos/maiúsculas; clicar num SELB ou local da tabela filtra por ele) e resumo do filtro (locais por onde o SELB passou, última entrega), busca livre por data/folha (clicar na linha abre a folha), filtro de não conferidos e exportação CSV (o mesmo SELB pode aparecer em várias entregas). Guarda a foto/PDF original (o botão abre o PDF na página da folha) e a folha retificada (anexos com SHA-256), revisões e auditoria.

@@ -7,7 +7,7 @@ Ferramentas de diagnóstico de hardware para PCs Windows, com um servidor web pa
 | Pasta | O que é |
 |---|---|
 | `diag-scripts/` | Scripts de coleta (PowerShell + menu `.bat`). Só leem o sistema. |
-| `diag-viewer/` | Servidor Node.js sem dependências + interface web. |
+| `diag-viewer/` | **Central diag**: servidor Node.js sem dependências + interface web (tema claro/escuro). |
 | `docs/` | Instalação com Docker/Portainer. |
 
 ### Scripts

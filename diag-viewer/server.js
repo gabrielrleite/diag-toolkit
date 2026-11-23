@@ -1,6 +1,6 @@
 'use strict';
 /*
-  Servidor do Visualizador de Coletas (diag-hardware)
+  Servidor da Central diag (coletas, laudos, equipamentos e recebimentos)
   - Serve a interface web (pasta web/)
   - POST /api/coletas           recebe o .zip enviado pelo script (token obrigatorio)
   - GET  /api/coletas           lista as coletas recebidas
@@ -413,12 +413,15 @@ async function laudoRoute(req, res, url, id) {
 // Cada folha: várias linhas (SELB, data, local, CPF, nome). A leitura é feita no navegador;
 // o servidor guarda o resultado conferido, a foto original e a imagem retificada (anexos).
 const COLS_RECEB = ['selb', 'data', 'local', 'cpf', 'nome'];
+// mesma regra do navegador para separar vários SELBs numa entrega ("A123, A124")
+const RecebOCR = require(path.join(WEB, 'receb-ocr.js'));
 function sanitizeFolha(b) {
   const F = {
     titulo: txt(b.titulo, 160), obs: txt(b.obs, 2000), dataFolha: /^\d{4}-\d{2}-\d{2}$/.test(b.dataFolha || '') ? b.dataFolha : '',
     linhas: (Array.isArray(b.linhas) ? b.linhas : []).slice(0, 300).map(l => {
       const o = { n: Math.max(0, Math.min(999, parseInt(l && l.n, 10) || 0)), revisado: !!(l && l.revisado), escrita: !!(l && l.escrita), conf: {} };
-      for (const k of COLS_RECEB) o[k] = txt(l && l[k], k === 'local' || k === 'nome' ? 160 : 40).replace(/[\r\n\t]+/g, ' ').trim();
+      for (const k of COLS_RECEB) o[k] = txt(l && l[k], k === 'local' || k === 'nome' ? 160 : k === 'selb' ? 300 : 40).replace(/[\r\n\t]+/g, ' ').trim();
+      o.selb = RecebOCR.juntarSelbs(RecebOCR.separarSelbs(o.selb).map(x => x.toUpperCase().slice(0, 40)).slice(0, 30));
       o.dataIso = /^\d{4}-\d{2}-\d{2}$/.test((l && l.dataIso) || '') ? l.dataIso : '';
       for (const k of COLS_RECEB) { const c = l && l.conf && +l.conf[k]; if (c >= 0 && c <= 100) o.conf[k] = Math.round(c); }
       return o;
@@ -566,6 +569,7 @@ async function loteRoute(req, res, url) {
   const campo = b.campo === 'selb' ? 'selb' : b.campo === 'local' ? 'local' : '';
   const de = txt(b.de, 160).trim(), para = txt(b.para, campo === 'local' ? 160 : 40).replace(/[\r\n\t]+/g, ' ').trim();
   const soSelb = txt(b.selb, 40).trim();
+  if (campo === 'selb' && RecebOCR.separarSelbs(para).length > 1) return json(res, 400, { erro: 'Corrija um SELB por vez.' });
   if (!campo || !de) return json(res, 400, { erro: 'Informe o campo e o valor a corrigir.' });
   const igual = campo === 'selb' ? (x, y) => chaveSelbRec(x) === chaveSelbRec(y) : (x, y) => normRec(x) === normRec(y);
   const novoValor = campo === 'selb' ? para.toUpperCase() : para;
@@ -578,7 +582,19 @@ async function loteRoute(req, res, url) {
       if (!f) return 0;
       let c = 0;
       for (const l of f.linhas || []) {
-        if (!l[campo] || !igual(l[campo], de) || (soSelb && chaveSelbRec(l.selb) !== chaveSelbRec(soSelb))) continue;
+        if (!l[campo] || (soSelb && !RecebOCR.temSelb(l.selb, soSelb))) continue;
+        if (campo === 'selb') {
+          // troca/apaga só o SELB indicado dentro da lista da entrega
+          const lista = RecebOCR.separarSelbs(l.selb);
+          if (!lista.some(x => igual(x, de))) continue;
+          const nova = [];
+          for (const x of lista) { const v = igual(x, de) ? novoValor : x; if (v && !nova.some(y => igual(y, v))) nova.push(v); }
+          l.selb = RecebOCR.juntarSelbs(nova); c++;
+          if (!l.selb) l.revisado = false;
+          if (l.conf) delete l.conf.selb;
+          continue;
+        }
+        if (!igual(l[campo], de)) continue;
         l[campo] = novoValor; c++;
         if (!novoValor) l.revisado = false; // ficou sem valor: volta para conferência
         if (l.conf) delete l.conf[campo];
@@ -1166,7 +1182,7 @@ const server = http.createServer(async (req, res) => {
 server.requestTimeout = 15 * 60 * 1000;
 seedModelos().catch(e => console.error('modelos:', e.message));
 server.listen(PORT, () => {
-  console.log(`Visualizador ouvindo na porta ${PORT}. Dados em ${DATA}`);
+  console.log(`Central diag ouvindo na porta ${PORT}. Dados em ${DATA}`);
   if (!UPLOAD_TOKEN) console.warn('AVISO: UPLOAD_TOKEN não definido. O recebimento de coletas está DESATIVADO.');
   if (!READ_TOKEN) console.warn('AVISO: READ_TOKEN não definido. Qualquer um na rede pode listar e baixar as coletas.');
 });
