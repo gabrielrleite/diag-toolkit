@@ -10,7 +10,7 @@
 // "ler": coluna digitada (OCR + ajuste manual). As demais (CPF, nome/assinatura) ficam só na imagem da folha.
 const FOLHA_MODELO = {
   colunas: [
-    { k: 'selb', rotulo: 'SELB', peso: 198, ler: true, wl: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/. ' },
+    { k: 'selb', rotulo: 'SELB', peso: 198, ler: true, wl: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/., ;+' },
     { k: 'data', rotulo: 'Data', peso: 254, ler: true, wl: '0123456789/.-' },
     { k: 'local', rotulo: 'Local', peso: 786, ler: true, wl: '' },
     { k: 'cpf', rotulo: 'CPF', peso: 340, ler: false },
@@ -21,6 +21,9 @@ const FOLHA_MODELO = {
 const RB = { folhas: [], q: '', fSelb: '', fLocal: '', cur: null, dirty: false, imp: null, worker: null, carregandoOcr: null };
 const COLS = FOLHA_MODELO.colunas;
 // o que aparece na tela e é digitado, na ordem de exibição
+// SELB: uma entrega pode ter vários ("A123, A124")
+const selbsDe = v => RecebOCR.separarSelbs(v);
+const normSelbs = v => RecebOCR.juntarSelbs(selbsDe(String(v || '').toUpperCase()));
 const CAMPOS = ['local', 'selb', 'data'].map(k => COLS.find(c => c.k === k)).filter(c => c && c.ler);
 const NA_IMAGEM = COLS.filter(c => !c.ler).map(c => c.rotulo).join(' e ');
 const dataOk = v => !v || RecebOCR.limparData(v).ok;
@@ -49,6 +52,7 @@ async function renderReceb(arg) {
       <div class="stats">
         <div class="stat"><div class="v">${RB.folhas.length}</div><div class="l">folhas</div></div>
         <div class="stat"><div class="v">${regs.length}</div><div class="l">recebimentos registrados</div></div>
+        <div class="stat"><div class="v">${regs.reduce((a, l) => a + selbsDe(l.selb).length, 0)}</div><div class="l">SELBs entregues</div></div>
         <div class="stat ${pend ? 'bad' : ''}"><div class="v">${pend}</div><div class="l">linhas não conferidas</div></div>
       </div>
       ${!RB.folhas.length ? '<p class="muted">Nenhuma folha ainda. Clique em "Importar folhas", escolha as fotos ou digitalizações e confira o que o OCR leu.</p>' : `
@@ -67,7 +71,7 @@ async function renderReceb(arg) {
         <label>Buscar <input type="search" id="rbQ" value="${esc(RB.q)}" placeholder="data, folha..." style="min-width:180px"></label>
         <label class="chk"><input type="checkbox" id="rbPend"> só não conferidos</label>
         <button class="btn ghost small" id="rbLimpar">Limpar filtros</button><span class="muted" id="rbN"></span></div>
-      <datalist id="rbDlFSelb">${[...new Set(regs.map(l => l.selb).filter(Boolean))].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
+      <datalist id="rbDlFSelb">${[...new Set(regs.flatMap(l => selbsDe(l.selb)))].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
       <datalist id="rbDlFLocal">${[...new Set(regs.map(l => l.local).filter(Boolean))].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
       <p class="muted" id="rbResumo" style="margin:0 0 8px"></p>
       <div id="rbRegs"></div></div>` : ''}`;
@@ -80,12 +84,12 @@ async function renderReceb(arg) {
   regs.sort((a, b) => String(b.dataIso || b.folha.criadoEm).localeCompare(String(a.dataIso || a.folha.criadoEm)) || a.n - b.n);
   const draw = () => {
     const q = N(RB.q), fs = chave(RB.fSelb), fl = N(RB.fLocal), so = $('#rbPend').checked;
-    filtrados = regs.filter(l => (!so || !l.revisado) && (!fs || chave(l.selb).includes(fs)) && (!fl || N(l.local).includes(fl)) && (!q || l._busca.includes(q)));
+    filtrados = regs.filter(l => (!so || !l.revisado) && (!fs || selbsDe(l.selb).some(x => chave(x).includes(fs))) && (!fl || N(l.local).includes(fl)) && (!q || l._busca.includes(q)));
     $('#rbN').textContent = `${filtrados.length} de ${regs.length}`;
     // resumo do filtro: por SELB mostra os locais por onde passou; por local, quantos SELB diferentes
     let resumo = '';
     if ((fs || fl) && filtrados.length) {
-      const conta = k => { const m = new Map(); for (const l of filtrados) if (l[k]) m.set(l[k], (m.get(l[k]) || 0) + 1); return [...m.entries()].sort((a, b) => b[1] - a[1]); };
+      const conta = k => { const m = new Map(); for (const l of filtrados) for (const v of k === 'selb' ? selbsDe(l.selb) : l[k] ? [l[k]] : []) m.set(v, (m.get(v) || 0) + 1); return [...m.entries()].sort((a, b) => b[1] - a[1]); };
       const ult = filtrados[0];
       resumo = fs ? `${filtrados.length} entrega(s) · locais: ${conta('local').map(([v, n]) => `${esc(v)} (${n})`).join(', ') || '—'} · última: ${esc(ult.data || '—')} em ${esc(ult.local || '—')}`
         : `${filtrados.length} entrega(s) · ${conta('selb').length} SELB diferente(s)`;
@@ -94,7 +98,7 @@ async function renderReceb(arg) {
     $('#rbRegs').innerHTML = `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Local</th><th class="nosort">SELB</th><th class="nosort">Data</th><th class="nosort">Folha</th></tr></thead><tbody>
       ${filtrados.slice(0, 1000).map(l => `<tr data-folha="${esc(l.folha.id)}~${l.n}">
         <td>${l.local ? `<button class="linklike" data-filtro="local" data-v="${esc(l.local)}" title="${esc((localCadastrado(l.local) ? enderecoTxt(localCadastrado(l.local)) + ' — ' : '') + 'clique para filtrar por este local')}">${esc(l.local)}</button>` : '—'}</td>
-        <td>${l.selb ? `<button class="linklike" data-filtro="selb" data-v="${esc(l.selb)}" title="Filtrar por este SELB">${esc(l.selb)}</button>` : '—'}</td>
+        <td>${selbsDe(l.selb).map(x => `<button class="linklike" data-filtro="selb" data-v="${esc(x)}" title="Filtrar por este SELB">${esc(x)}</button>`).join(', ') || '—'}</td>
         <td class="t">${esc(l.data || '—')}</td>
         <td><small>${esc(l.folha.titulo || l.folha.id)} · linha ${l.n}</small>${l.revisado ? '' : ' <span class="badge warn">conferir</span>'}</td></tr>`).join('')}
       </tbody></table></div>${filtrados.length > 1000 ? '<p class="muted">Mostrando os primeiros 1000. Refine a busca.</p>' : ''}`;
@@ -113,8 +117,8 @@ async function renderReceb(arg) {
   $('#rbPend').addEventListener('change', draw);
   $('#rbCsv').addEventListener('click', () => {
     const cel = v => /[";\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
-    const linhas = [['Local', 'SELB', 'Data', 'Folha', 'Linha', 'Conferido'].join(';'),
-      ...filtrados.map(l => [l.local, l.selb, l.data, l.folha.titulo || l.folha.id, l.n, l.revisado ? 'sim' : 'não'].map(cel).join(';'))];
+    const linhas = [['Local', 'SELB', 'Qtd SELB', 'Data', 'Folha', 'Linha', 'Conferido'].join(';'),
+      ...filtrados.map(l => [l.local, l.selb, selbsDe(l.selb).length, l.data, l.folha.titulo || l.folha.id, l.n, l.revisado ? 'sim' : 'não'].map(cel).join(';'))];
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob(['﻿' + linhas.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
     a.download = `recebimentos${RB.fSelb ? '-selb-' + chave(RB.fSelb) : ''}-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
@@ -153,7 +157,7 @@ async function carregarVocab() {
     const r = await api('api/recebimentos?linhas=1').catch(() => null);
     if (r && r.ok) RB.folhas = await r.json();
   }
-  const conta = k => { const m = new Map(); for (const f of RB.folhas) for (const l of f.linhas || []) if (l[k]) m.set(l[k], (m.get(l[k]) || 0) + 1); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); };
+  const conta = k => { const m = new Map(); for (const f of RB.folhas) for (const l of f.linhas || []) for (const v of k === 'selb' ? selbsDe(l.selb) : l[k] ? [l[k]] : []) m.set(v, (m.get(v) || 0) + 1); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); };
   // locais cadastrados vêm primeiro (nome oficial), depois os já usados nas folhas
   const cad = await carregarLocais().catch(() => []);
   RB.vocab = { local: [...new Set([...cad.map(L => L.nome), ...conta('local')])], selb: conta('selb') };
@@ -163,14 +167,15 @@ async function carregarVocab() {
 const chaveSelb = v => RecebOCR.normalizar(v).replace(/ /g, '');
 // última entrega registrada desse SELB (outras folhas + outras linhas desta folha) e quantas vezes o local se repete
 function historicoSelb(selb, F, linhaAtual) {
-  const k = chaveSelb(selb);
-  if (!k) return null;
+  const meus = selbsDe(selb);
+  if (!meus.length) return null;
+  const casa = campo => meus.some(x => RecebOCR.temSelb(campo, x));
   const regs = [];
   for (const f of RB.folhas || []) {
     if (F.id && f.id === F.id) continue; // a folha aberta entra pelas linhas atuais (podem ter mudado)
-    for (const l of f.linhas || []) if (l.local && chaveSelb(l.selb) === k) regs.push({ local: l.local, quando: l.dataIso || (f.criadoEm || '').slice(0, 10) });
+    for (const l of f.linhas || []) if (l.local && casa(l.selb)) regs.push({ local: l.local, quando: l.dataIso || (f.criadoEm || '').slice(0, 10) });
   }
-  for (const l of F.linhas || []) if (l !== linhaAtual && l.local && chaveSelb(l.selb) === k && !(l.dica && l.dica.local && l.dica.local.tipo === 'historico'))
+  for (const l of F.linhas || []) if (l !== linhaAtual && l.local && casa(l.selb) && !(l.dica && l.dica.local && l.dica.local.tipo === 'historico'))
     regs.push({ local: l.local, quando: l.dataIso || F.dataFolha || '9999' });
   if (!regs.length) return null;
   regs.sort((a, b) => String(b.quando).localeCompare(String(a.quando)));
@@ -489,6 +494,16 @@ function montarRevisao(lidos) {
         continue;
       }
       const t = RecebOCR.limparTexto(v.texto).toUpperCase();
+      if (c.k === 'selb') {
+        // vários SELBs: corrige cada um pela lista dos já registrados
+        const itens = selbsDe(t), voc = (RB.vocab && RB.vocab.selb) || [];
+        const corr = itens.map(x => { const sg = RecebOCR.sugerir(x, voc, 0.8); return sg ? sg.valor : x; });
+        const conhecidos = itens.filter((x, j) => RecebOCR.sugerir(x, voc, 0.8)).length;
+        if (!itens.length || (v.conf < 40 && !conhecidos)) { if (t) l.dica.selb = { tipo: 'incerto', texto: t }; continue; }
+        l.selb = RecebOCR.juntarSelbs(corr);
+        if (RecebOCR.normalizar(l.selb) !== RecebOCR.normalizar(RecebOCR.juntarSelbs(itens))) l.dica.selb = { tipo: 'lista', texto: RecebOCR.juntarSelbs(itens) };
+        continue;
+      }
       // compara com o que já foi cadastrado (cursiva costuma sair "parecida")
       const sug = t && RecebOCR.sugerir(t, (RB.vocab && RB.vocab[c.k]) || [], c.k === 'selb' ? 0.8 : 0.7);
       if (sug && RecebOCR.normalizar(sug.valor) !== RecebOCR.normalizar(t)) { l[c.k] = sug.valor; l.dica[c.k] = { tipo: 'lista', texto: t, sim: sug.sim }; }
@@ -588,8 +603,9 @@ function renderFolhaEditor(F, imgs, opt = {}) {
           : dica.tipo === 'histSug'
           ? `histórico do SELB ${esc(dica.selb)}: “${esc(dica.valor)}”${quando} <button type="button" class="linklike" data-hist="${i}">usar</button>`
           : `ilegível para o OCR${dica.texto ? ` (leu “${esc(dica.texto)}”)` : ''}: digite olhando a foto`;
-        return `<label class="rb-c rb-${c.k}">${esc(c.rotulo)}${conf != null ? ` <small title="confiança do OCR">${conf}%</small>` : ''}
-          <input data-i="${i}" data-k="${c.k}" value="${esc(v)}" class="${ruim ? 'rb-ruim' : ''}" maxlength="${c.k === 'local' ? 160 : 40}" ${lista ? `list="${lista}"` : ''} ${c.k === 'data' ? 'placeholder="dd/mm/aaaa"' : ''} autocomplete="off">
+        const nSel = c.k === 'selb' ? selbsDe(v).length : 0;
+        return `<label class="rb-c rb-${c.k}">${esc(c.rotulo)}${nSel > 1 ? ` <span class="badge" data-nsel>${nSel} SELBs</span>` : ''}${conf != null ? ` <small title="confiança do OCR">${conf}%</small>` : ''}
+          <input data-i="${i}" data-k="${c.k}" value="${esc(v)}" class="${ruim ? 'rb-ruim' : ''}" maxlength="${c.k === 'local' ? 160 : c.k === 'selb' ? 300 : 40}" ${lista ? `list="${lista}"` : ''} ${c.k === 'data' ? 'placeholder="dd/mm/aaaa"' : c.k === 'selb' ? 'placeholder="vários: A123, A124"' : ''} autocomplete="off">
           ${txtDica ? `<small class="rb-dica">${txtDica}</small>` : ''}</label>`;
       };
       const src = imgs && imgs[l.n];
@@ -630,7 +646,10 @@ function renderFolhaEditor(F, imgs, opt = {}) {
     // SELB digitado/alterado: busca o local no histórico (sem perder o foco de quem estava digitando)
     box.querySelectorAll('input[data-k="selb"]').forEach(inp => inp.addEventListener('change', () => {
       const l = F.linhas[+inp.dataset.i];
-      l.selb = inp.value = inp.value.trim().toUpperCase();
+      l.selb = inp.value = normSelbs(inp.value);
+      const lab = inp.closest('label'), nb = lab.querySelector('[data-nsel]'), n = selbsDe(l.selb).length;
+      if (nb) nb.remove();
+      if (n > 1) { const bd = document.createElement('span'); bd.className = 'badge'; bd.textContent = `${n} SELBs`; bd.setAttribute('data-nsel', ''); lab.firstChild.after(' ', bd); }
       const antes = JSON.stringify([l.local, l.dica && l.dica.local]);
       aplicarHistorico(l, F);
       if (JSON.stringify([l.local, l.dica && l.dica.local]) === antes) return;

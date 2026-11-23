@@ -385,8 +385,22 @@ const RecebOCR = (() => {
     return melhor;
   }
 
+  // ---------------------------------------------------------------- vários SELBs na mesma entrega
+  // Separadores: vírgula, ponto e vírgula, "+", "|", quebra de linha e " e ". Espaço só separa quando
+  // todas as partes parecem SELB completos (3+ caracteres com dígito): "A123 A124" -> 2, "B7 7" -> 1.
+  const chaveSelb = t => normalizar(t).replace(/ /g, '');
+  function separarSelbs(t) {
+    const partes = String(t || '').replace(/\s+e\s+/gi, ',').split(/[,;+|\n]+/)
+      .map(x => x.trim().replace(/\s+/g, ' ')).filter(Boolean)
+      .flatMap(p => { const q = p.split(' '); return q.length > 1 && q.every(x => x.length >= 3 && /\d/.test(x)) ? q : [p]; });
+    const vistos = new Set();
+    return partes.filter(p => { const k = chaveSelb(p); if (!k || vistos.has(k)) return false; vistos.add(k); return true; });
+  }
+  const juntarSelbs = lista => lista.join(', ');
+  const temSelb = (campo, selb) => { const k = chaveSelb(selb); return !!k && separarSelbs(campo).some(x => chaveSelb(x) === k); };
+
   return {
-    normalizar, similaridade, sugerir,
+    normalizar, similaridade, sugerir, chaveSelb, separarSelbs, juntarSelbs, temSelb,
     cinza, reduzir, binarizar, mascarasLinhas, detectarCantos, homografia, aplicar, cantosGirados, retificar,
     analisarGrade, celula, tinta, temConteudo, scoreLarguras, cpfValido, limparCpf, limparData, limparTexto, soDigitos,
   };

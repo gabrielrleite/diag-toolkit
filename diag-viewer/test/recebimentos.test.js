@@ -54,3 +54,15 @@ assert.strictEqual(O.sugerir('SALA 2O4 BL0CO B', locais).valor, 'SALA 204 BLOCO 
 assert.strictEqual(O.sugerir('DIRETORIA', locais), null);
 assert.ok(O.similaridade('abc', 'ABC') === 1 && O.similaridade('', 'x') === 0);
 console.log('recebimentos (sugestões): ok');
+
+// vários SELBs na mesma entrega
+assert.deepStrictEqual(O.separarSelbs('A123, A124'), ['A123', 'A124']);
+assert.deepStrictEqual(O.separarSelbs('A123; a124 + B77'), ['A123', 'a124', 'B77']);
+assert.deepStrictEqual(O.separarSelbs('A123 e A124'), ['A123', 'A124']);
+assert.deepStrictEqual(O.separarSelbs('A123 A124'), ['A123', 'A124']);
+assert.deepStrictEqual(O.separarSelbs('B7 7'), ['B7 7']);                 // espaço dentro de um SELB
+assert.deepStrictEqual(O.separarSelbs('A123, a123'), ['A123']);            // sem repetidos
+assert.deepStrictEqual(O.separarSelbs(''), []);
+assert.ok(O.temSelb('A123, B77', 'b-77') && !O.temSelb('A123, B77', 'B7'));
+assert.strictEqual(O.juntarSelbs(['A1', 'B2']), 'A1, B2');
+console.log('recebimentos (vários SELBs): ok');

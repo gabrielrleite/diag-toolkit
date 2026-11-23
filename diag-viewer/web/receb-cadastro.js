@@ -74,7 +74,7 @@ async function renderLocais(editarId) {
   for (const l of regs) {
     if (!l.local) continue;
     const k = nrm(l.local), u = usados.get(k) || { nome: l.local, n: 0, selbs: new Set(), ult: '' };
-    u.n++; if (l.selb) u.selbs.add(l.selb);
+    u.n++; for (const x of RecebOCR.separarSelbs(l.selb)) u.selbs.add(x);
     if ((l.dataIso || '') > u.ult) u.ult = l.dataIso || '';
     usados.set(k, u);
   }
@@ -189,9 +189,9 @@ async function renderSelbs() {
   if (!(await needServer(el))) return;
   const [regs] = await Promise.all([carregarEntregas(), carregarLocais()]);
   const mapa = new Map();
-  for (const l of regs) {
-    if (!l.selb) continue;
-    const k = kSelb(l.selb), s = mapa.get(k) || { selb: l.selb, n: 0, locais: new Map(), ult: null };
+  // uma entrega com vários SELBs conta para cada um deles
+  for (const l of regs) for (const sel of RecebOCR.separarSelbs(l.selb)) {
+    const k = kSelb(sel), s = mapa.get(k) || { selb: sel.toUpperCase(), n: 0, locais: new Map(), ult: null };
     s.n++;
     if (l.local) { const lk = nrm(l.local), o = s.locais.get(lk) || { nome: l.local, n: 0 }; o.n++; s.locais.set(lk, o); }
     if (!s.ult || (l.dataIso || '') > (s.ult.dataIso || '')) s.ult = l;
