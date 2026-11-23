@@ -12,6 +12,11 @@ const state = {
 };
 
 // ------------------------------------------------------------------ utilitarios
+// ícones (icones.svg), cartões de número e estados vazios usados pelas telas
+const IC = (nome, cls = 'ic') => `<svg class="${cls}" aria-hidden="true"><use href="icones.svg#i-${nome}"/></svg>`;
+// tom: '' (azul), 'ok', 'warn', 'bad', 'violeta'
+const statHtml = (v, l, ic, tom = '') => `<div class="stat ${tom}">${ic ? `<span class="stat-ic">${IC(ic)}</span>` : ''}<div class="stat-tx"><div class="v">${v}</div><div class="l">${l}</div></div></div>`;
+const vazioHtml = (ic, titulo, texto = '') => `<div class="vazio"><span class="vazio-ic">${IC(ic)}</span><b>${titulo}</b>${texto ? `<span>${texto}</span>` : ''}</div>`;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = n => String(n).padStart(2, '0');
 const fmt = d => d ? `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` : '—';
@@ -354,11 +359,11 @@ function renderAnalise() {
   const cov = state.coverage;
   let h = `
   <div class="stats">
-    <div class="stat"><div class="v">${state.devices.length}</div><div class="l">dispositivos listados</div></div>
-    <div class="stat ${removed.length ? 'bad' : ''}"><div class="v">${removed.length}</div><div class="l">não presentes</div></div>
-    <div class="stat ${gpusRemoved.length ? 'bad' : ''}"><div class="v">${gpusRemoved.length}</div><div class="l">placas de vídeo ausentes</div></div>
-    <div class="stat"><div class="v">${state.boots.filter(b => b.id === 6005).length}</div><div class="l">boots no período</div></div>
-    <div class="stat ${del420.length ? 'bad' : ''}"><div class="v">${del420.length}</div><div class="l">dispositivos excluídos (420)</div></div>
+    ${statHtml(state.devices.length, 'dispositivos listados', 'chip', '')}
+    ${statHtml(removed.length, 'não presentes', 'alerta', removed.length ? 'bad' : '')}
+    ${statHtml(gpusRemoved.length, 'placas de vídeo ausentes', 'monitor', gpusRemoved.length ? 'bad' : '')}
+    ${statHtml(state.boots.filter(b => b.id === 6005).length, 'boots no período', 'raio', '')}
+    ${statHtml(del420.length, 'dispositivos excluídos (420)', 'chip', del420.length ? 'bad' : '')}
   </div>
   <div class="note info">Os logs desta coleta cobrem de <b>${fmt(cov && cov.from)}</b> até <b>${fmt(cov && cov.to)}</b>.
   As datas dos dispositivos vêm do registro e não dependem desse período.</div>`;
@@ -741,7 +746,7 @@ function drawServerList() {
       <div class="filters" style="margin:0"><input type="search" id="srvQ" placeholder="computador, patrimônio, usuário..." value="${esc(srv.q)}">
       <button class="btn small ghost" id="srvRe">Atualizar</button></div></div>
     ${!srv.info.envioAtivo ? '<div class="note">Recebimento desativado: defina UPLOAD_TOKEN no servidor.</div>' : ''}
-    ${!srv.list.length ? '<p class="muted">Nenhuma coleta recebida ainda. Baixe os scripts em <a href="download/">Downloads</a>; com o diag-servidor.cfg, o envio já vem ativado.</p>' :
+    ${!srv.list.length ? vazioHtml('arquivo', 'Nenhuma coleta recebida ainda', 'Baixe os scripts em <a href="download/">Downloads</a>; com o diag-servidor.cfg, o envio já vem ativado.') :
       `<div class="tablewrap" style="max-height:50vh"><table><thead><tr>
         <th class="nosort">Recebida em</th><th class="nosort">Tipo</th><th class="nosort">Computador</th><th class="nosort">Patrimônio</th><th class="nosort">Enviada por</th><th class="nosort">Tamanho</th><th class="nosort">SHA256</th><th class="nosort"></th></tr></thead>
       <tbody>${rows.map(m => `<tr>

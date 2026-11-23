@@ -42,7 +42,15 @@ function showModule(mod) {
   $('#mod-equip').hidden = mod !== 'equip';
   $('#mod-receb').hidden = mod !== 'receb';
   $('#act-coletas').hidden = mod !== 'coletas';
-  document.title = { coletas: 'Remoção de hardware', laudos: 'Laudos de manutenção', equip: 'Equipamentos', receb: 'Recebimentos' }[mod] + ' · Central diag';
+  // cabeçalho da página
+  const [titulo, sub, ic] = {
+    coletas: ['Remoção de hardware', 'Coletas do diag-hardware: linha do tempo, saúde e relatório técnico', 'chip'],
+    laudos: ['Laudos de manutenção', 'Laudos numerados, modelos personalizáveis e assinatura digital', 'doc'],
+    equip: ['Equipamentos', 'Histórico de coletas e laudos por patrimônio', 'monitor'],
+    receb: ['Recebimentos', 'Folhas de entrega assinadas, lidas por OCR, com locais e SELBs', 'caixa'],
+  }[mod];
+  $('#pgTitulo').textContent = titulo; $('#pgSub').textContent = sub; $('#pgIcone').innerHTML = IC(ic);
+  document.title = titulo + ' · Central diag';
 }
 
 async function route() {
@@ -106,7 +114,7 @@ async function renderLaudoList() {
   if (!(await needServer(el))) return;
   el.innerHTML = `
     <div class="panel">
-      <div class="head-row"><h2>Laudos de manutenção</h2><div class="filters" style="margin:0"><a href="#modelos" class="btn ghost">Modelos</a><button class="btn" id="ldNovo">Novo laudo</button></div></div>
+      <div class="head-row"><h2>Todos os laudos</h2><div class="filters" style="margin:0"><a href="#modelos" class="btn ghost">Modelos</a><button class="btn" id="ldNovo">Novo laudo</button></div></div>
       <div class="filters">
         <label>Buscar <input type="search" id="ldQ" value="${esc(LD.q)}" placeholder="nº, patrimônio, setor, problema..."></label>
         <label>Situação <select id="ldSt"><option value="">Todas</option>${Object.entries(STATUS_TXT).map(([k, t]) => `<option value="${k}" ${LD.fStatus === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
@@ -118,7 +126,7 @@ async function renderLaudoList() {
     const q = LD.q.trim().toLowerCase();
     const rows = LD.list.filter(l => (!LD.fStatus || l.status === LD.fStatus) && (!LD.fConc || l.conclusao === LD.fConc) &&
       (!q || [l.numero, l.patrimonio, l.computador, l.setor, l.problema, l.chamado, l.modeloNome].join(' ').toLowerCase().includes(q)));
-    $('#ldTable').innerHTML = !LD.list.length ? '<p class="muted">Nenhum laudo ainda. Clique em "Novo laudo".</p>' :
+    $('#ldTable').innerHTML = !LD.list.length ? vazioHtml('doc', 'Nenhum laudo ainda', 'Clique em "Novo laudo" ou crie a partir de uma coleta de diagnóstico.') :
       `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Nº</th><th class="nosort">Modelo</th><th class="nosort">Aberto em</th><th class="nosort">Equipamento</th><th class="nosort">Setor</th><th class="nosort">Problema</th><th class="nosort">Conclusão</th><th class="nosort">Situação</th></tr></thead><tbody>
       ${rows.map(l => `<tr data-open-laudo="${esc(l.id)}">
         <td><b>${esc(l.numero)}</b>${l.revisao > 1 ? `<br><small>rev. ${l.revisao}</small>` : ''}</td>
@@ -904,13 +912,13 @@ async function renderEquip(sel) {
     el.querySelectorAll('[data-eqcol]').forEach(b => b.addEventListener('click', () => { location.hash = ''; showModule('coletas'); openFromServer(b.dataset.eqcol, b); }));
     return;
   }
-  el.innerHTML = `<div class="panel"><div class="head-row"><h2>Equipamentos</h2>
+  el.innerHTML = `<div class="panel"><div class="head-row"><h2>Todos os equipamentos</h2>
       <input type="search" id="eqQ" placeholder="patrimônio ou nome do computador"></div>
       <p class="muted">Equipamentos com coleta ou laudo registrado no servidor.</p><div id="eqTable"></div></div>`;
   const draw = q => {
     q = (q || '').trim().toLowerCase();
     const rows = equips.filter(o => !q || (o.patrimonio + ' ' + [...o.computadores].join(' ')).toLowerCase().includes(q));
-    $('#eqTable').innerHTML = !equips.length ? '<p class="muted">Nenhum registro ainda.</p>' : `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Patrimônio</th><th class="nosort">Computador</th><th class="nosort">Coletas</th><th class="nosort">Laudos</th><th class="nosort">Último laudo</th><th class="nosort">Última atividade</th></tr></thead><tbody>
+    $('#eqTable').innerHTML = !equips.length ? vazioHtml('monitor', 'Nenhum equipamento ainda', 'Os equipamentos aparecem aqui a partir das coletas recebidas e dos laudos.') : `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Patrimônio</th><th class="nosort">Computador</th><th class="nosort">Coletas</th><th class="nosort">Laudos</th><th class="nosort">Último laudo</th><th class="nosort">Última atividade</th></tr></thead><tbody>
       ${rows.map(o => { const ul = o.laudos.slice().sort((a, b) => String(b.criadoEm).localeCompare(String(a.criadoEm)))[0];
         return `<tr data-eq="${esc(o.k)}"><td><b>${esc(o.patrimonio || '—')}</b></td><td>${[...o.computadores].map(esc).join('<br>')}</td><td>${o.coletas.length}</td><td>${o.laudos.length}</td>
         <td>${ul ? `${esc(ul.numero)} ${ul.conclusao ? `<span class="badge ${CONCLUSAO_CLS[ul.conclusao] || ''}">${esc(CONCLUSAO_TXT[ul.conclusao].split(' –')[0])}</span>` : ''}` : '—'}</td>

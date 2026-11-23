@@ -18,7 +18,39 @@ const FOLHA_MODELO = {
   ],
   cabecalho: true, // primeira linha da grade é o cabeçalho
 };
-const RB = { folhas: [], q: '', fSelb: '', fLocal: '', cur: null, dirty: false, imp: null, worker: null, carregandoOcr: null };
+const RB = { folhas: [], q: '', fSelb: '', fLocal: '', cur: null, dirty: false, imp: null, worker: null, carregandoOcr: null, selbsCad: new Map() };
+
+// ---------------------------------------------------------------- itens entregues (suprimentos de impressoras)
+// cada SELB é uma impressora/scanner; numa entrega vão tintas/toners por cor e caixa de manutenção
+const ITENS = { preto: 'Preto', azul: 'Azul (ciano)', magenta: 'Magenta', amarelo: 'Amarelo', caixa: 'Caixa de manutenção' };
+const ITENS_CURTO = { preto: 'P', azul: 'A', magenta: 'M', amarelo: 'Am', caixa: 'Caixa' };
+const SUPRIMENTO_TXT = { tinta: 'tinta', toner: 'toner', nenhum: 'sem suprimento' };
+const TIPO_EQUIP_TXT = { impressora: 'Impressora', multifuncional: 'Multifuncional', scanner: 'Scanner', outro: 'Outro' };
+const cadSelb = selb => RB.selbsCad.get(RecebOCR.chaveSelb(selb)) || null;
+// suprimentos que o SELB usa (pelo cadastro; sem cadastro, todas as opções)
+function suprimentosDe(selb) {
+  const c = cadSelb(selb);
+  if (!c) return ['preto', 'azul', 'magenta', 'amarelo', 'caixa'];
+  return [...c.cores, ...(c.caixa ? ['caixa'] : [])];
+}
+const nomeSuprimento = (item, tipo) => item === 'caixa' ? ITENS.caixa : `${tipo === 'toner' ? 'Toner' : 'Tinta'} ${ITENS[item].toLowerCase()}`;
+const resumoEquip = c => !c ? '' : [TIPO_EQUIP_TXT[c.tipo], [c.marca, c.modelo].filter(Boolean).join(' '), c.cor === 'pb' ? 'preto e branco' : 'colorida', SUPRIMENTO_TXT[c.suprimento]].filter(Boolean).join(' · ');
+// bolinhas coloridas com quantidade (lista, aba SELBs)
+function itensHtml(itens, porSelb = true) {
+  if (!itens || !itens.length) return '<span class="muted">—</span>';
+  const bola = it => `<span class="it-bola it-${it.item}" title="${esc(nomeSuprimento(it.item, it.tipo))}${it.qtd > 1 ? ' × ' + it.qtd : ''}">${it.item === 'caixa' ? IC('caixa') : ''}${it.qtd > 1 ? `<i>${it.qtd}</i>` : ''}</span>`;
+  if (!porSelb) return `<span class="it-bolas">${itens.map(bola).join('')}</span>`;
+  const g = new Map();
+  for (const it of itens) (g.get(it.selb) || g.set(it.selb, []).get(it.selb)).push(it);
+  return [...g.entries()].map(([sel, l]) => `<span class="it-grupo">${g.size > 1 ? `<small>${esc(sel)}</small>` : ''}<span class="it-bolas">${l.map(bola).join('')}</span></span>`).join('');
+}
+const itensTexto = itens => (itens || []).map(it => `${it.selb}: ${nomeSuprimento(it.item, it.tipo)}${it.qtd > 1 ? ' x' + it.qtd : ''}`).join('; ');
+async function carregarSelbsCad() {
+  const r = await api('api/receb-selbs').catch(() => null);
+  const lista = r && r.ok ? await r.json() : [];
+  RB.selbsCad = new Map(lista.map(c => [RecebOCR.chaveSelb(c.selb), c]));
+  return lista;
+}
 const COLS = FOLHA_MODELO.colunas;
 // o que aparece na tela e é digitado, na ordem de exibição
 // SELB: uma entrega pode ter vários ("A123, A124")
@@ -36,14 +68,14 @@ async function renderReceb(arg) {
   }
   RB.dirty = false; RB.cur = null;
   if (arg === 'importar') return renderImportar();
-  if (arg === 'selbs') return renderSelbs();
+  if (arg && arg.split('~')[0] === 'selbs') return renderSelbs(arg.split('~').slice(1).join('~'));
   if (arg === 'treino') return renderTreino();
   if (arg && arg.split('~')[0] === 'locais') return renderLocais(arg.split('~')[1] || '');
   if (arg) { const [fid, n] = arg.split('~'); return abrirFolha(fid, +n || 0); }
   RB.imp = null;
   el.innerHTML = abasReceb('entregas') + '<div class="panel">Carregando...</div>';
   if (!(await needServer(el))) return;
-  const [r] = await Promise.all([api('api/recebimentos?linhas=1').catch(() => null), carregarLocais()]);
+  const [r] = await Promise.all([api('api/recebimentos?linhas=1').catch(() => null), carregarLocais(), carregarSelbsCad()]);
   RB.folhas = r && r.ok ? await r.json() : [];
   const regs = RB.folhas.flatMap(f => f.linhas.map(l => ({ ...l, folha: f })));
   const pend = regs.filter(l => !l.revisado).length;
@@ -51,12 +83,13 @@ async function renderReceb(arg) {
     <div class="panel">
       <div class="head-row"><h2>Folhas de recebimento</h2><a class="btn" href="#receb/importar">Importar folhas (OCR)</a></div>
       <div class="stats">
-        <div class="stat"><div class="v">${RB.folhas.length}</div><div class="l">folhas</div></div>
-        <div class="stat"><div class="v">${regs.length}</div><div class="l">recebimentos registrados</div></div>
-        <div class="stat"><div class="v">${regs.reduce((a, l) => a + selbsDe(l.selb).length, 0)}</div><div class="l">SELBs entregues</div></div>
-        <div class="stat ${pend ? 'bad' : ''}"><div class="v">${pend}</div><div class="l">linhas não conferidas</div></div>
+        ${statHtml(RB.folhas.length, 'folhas', 'arquivo', '')}
+        ${statHtml(regs.length, 'recebimentos registrados', 'lista', 'violeta')}
+        ${statHtml(regs.reduce((a, l) => a + selbsDe(l.selb).length, 0), 'SELBs entregues', 'tag', 'ok')}
+        ${statHtml(regs.reduce((a, l) => a + (l.itens || []).reduce((b, it) => b + it.qtd, 0), 0), 'tintas, toners e caixas', 'caixa', 'violeta')}
+        ${statHtml(pend, 'linhas não conferidas', 'alerta', pend ? 'bad' : '')}
       </div>
-      ${!RB.folhas.length ? '<p class="muted">Nenhuma folha ainda. Clique em "Importar folhas", escolha as fotos ou digitalizações e confira o que o OCR leu.</p>' : `
+      ${!RB.folhas.length ? vazioHtml('caixa', 'Nenhuma folha ainda', 'Clique em "Importar folhas", escolha as fotos, digitalizações ou PDFs e confira o que o OCR leu.') : `
       <div class="tablewrap" style="max-height:34vh"><table class="clickable"><thead><tr><th class="nosort">Folha</th><th class="nosort">Data</th><th class="nosort">Linhas</th><th class="nosort">Conferência</th><th class="nosort">Importada em</th></tr></thead><tbody>
       ${RB.folhas.map(f => `<tr data-folha="${esc(f.id)}"><td><b>${esc(f.titulo || f.id)}</b><br><small class="mono">${esc(f.id)}</small></td>
         <td class="t">${f.dataFolha ? esc(f.dataFolha.split('-').reverse().join('/')) : '—'}</td><td>${f.total}</td>
@@ -96,10 +129,11 @@ async function renderReceb(arg) {
         : `${filtrados.length} entrega(s) · ${conta('selb').length} SELB diferente(s)`;
     }
     $('#rbResumo').innerHTML = resumo;
-    $('#rbRegs').innerHTML = `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Local</th><th class="nosort">SELB</th><th class="nosort">Data</th><th class="nosort">Folha</th></tr></thead><tbody>
+    $('#rbRegs').innerHTML = `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Local</th><th class="nosort">SELB</th><th class="nosort">Itens entregues</th><th class="nosort">Data</th><th class="nosort">Folha</th></tr></thead><tbody>
       ${filtrados.slice(0, 1000).map(l => `<tr data-folha="${esc(l.folha.id)}~${l.n}">
         <td>${l.local ? `<button class="linklike" data-filtro="local" data-v="${esc(l.local)}" title="${esc((localCadastrado(l.local) ? enderecoTxt(localCadastrado(l.local)) + ' — ' : '') + 'clique para filtrar por este local')}">${esc(l.local)}</button>` : '—'}</td>
         <td>${selbsDe(l.selb).map(x => `<button class="linklike" data-filtro="selb" data-v="${esc(x)}" title="Filtrar por este SELB">${esc(x)}</button>`).join(', ') || '—'}</td>
+        <td>${itensHtml(l.itens)}</td>
         <td class="t">${esc(l.data || '—')}</td>
         <td><small>${esc(l.folha.titulo || l.folha.id)} · linha ${l.n}</small>${l.revisado ? '' : ' <span class="badge warn">conferir</span>'}</td></tr>`).join('')}
       </tbody></table></div>${filtrados.length > 1000 ? '<p class="muted">Mostrando os primeiros 1000. Refine a busca.</p>' : ''}`;
@@ -118,8 +152,8 @@ async function renderReceb(arg) {
   $('#rbPend').addEventListener('change', draw);
   $('#rbCsv').addEventListener('click', () => {
     const cel = v => /[";\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
-    const linhas = [['Local', 'SELB', 'Qtd SELB', 'Data', 'Folha', 'Linha', 'Conferido'].join(';'),
-      ...filtrados.map(l => [l.local, l.selb, selbsDe(l.selb).length, l.data, l.folha.titulo || l.folha.id, l.n, l.revisado ? 'sim' : 'não'].map(cel).join(';'))];
+    const linhas = [['Local', 'SELB', 'Qtd SELB', 'Itens entregues', 'Qtd itens', 'Data', 'Folha', 'Linha', 'Conferido'].join(';'),
+      ...filtrados.map(l => [l.local, l.selb, selbsDe(l.selb).length, itensTexto(l.itens), (l.itens || []).reduce((a, it) => a + it.qtd, 0), l.data, l.folha.titulo || l.folha.id, l.n, l.revisado ? 'sim' : 'não'].map(cel).join(';'))];
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob(['﻿' + linhas.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
     a.download = `recebimentos${RB.fSelb ? '-selb-' + chave(RB.fSelb) : ''}-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
@@ -162,6 +196,9 @@ async function carregarVocab() {
   // locais cadastrados vêm primeiro (nome oficial), depois os já usados nas folhas
   const cad = await carregarLocais().catch(() => []);
   RB.vocab = { local: [...new Set([...cad.map(L => L.nome), ...conta('local')])], selb: conta('selb') };
+  // SELBs cadastrados também valem para o formato e o autocompletar
+  await carregarSelbsCad().catch(() => {});
+  RB.vocab.selb = [...new Set([...RB.vocab.selb, ...[...RB.selbsCad.values()].map(c => c.selb)])];
   RB.formatoSelb = RecebOCR.formatoSelb(RB.vocab.selb); // ex.: 1 letra + 4 dígitos
   // modo treinamento: regras aprendidas com as correções ("leitura X foi corrigida para Y")
   const tr = await api('api/treino').then(r => r.ok ? r.json() : null).catch(() => null);
@@ -729,6 +766,26 @@ function montarManual() {
 }
 const novaLinha = n => ({ n, revisado: false, conf: {}, selb: '', data: '', dataIso: '', local: '', escrita: false });
 
+// seção "Itens entregues" de uma linha: para cada SELB, as cores/caixa que ele usa
+function itensEditor(l, i) {
+  const sels = selbsDe(l.selb).map(x => x.toUpperCase());
+  if (!sels.length) return `<div class="it-ed it-vazio">${IC('caixa')} Informe o SELB para marcar as tintas/toners e caixas entregues.</div>`;
+  return `<div class="it-ed">${sels.map(sel => {
+    const c = cadSelb(sel), tipo = c && c.suprimento === 'toner' ? 'toner' : 'tinta';
+    const chips = c && c.suprimento === 'nenhum' && !c.caixa ? '<span class="muted">sem suprimentos (scanner)</span>' : suprimentosDe(sel).map(item => {
+      const it = (l.itens || []).find(x => x.selb === sel && x.item === item);
+      return `<label class="it-chip ${it ? 'on' : ''}" title="${esc(nomeSuprimento(item, tipo))}"><input type="checkbox" data-it data-i="${i}" data-selb="${esc(sel)}" data-item="${item}" ${it ? 'checked' : ''}>
+        <span class="it-bola it-${item}">${item === 'caixa' ? IC('caixa') : ''}</span>${item === 'caixa' ? 'Caixa' : ITENS[item].replace(' (ciano)', '')}
+        <input type="number" class="it-qtd" min="1" max="99" value="${it ? it.qtd : 1}" aria-label="quantidade"></label>`;
+    }).join('');
+    return `<div class="it-selb"><div class="it-cab"><b>${esc(sel)}</b> <small>${c ? esc(resumoEquip(c)) : 'sem cadastro'}</small>
+        ${c ? '' : `<a class="linklike" href="#receb/selbs~${encodeURIComponent(sel)}" target="_blank" rel="noopener">cadastrar</a>`}
+        <button type="button" class="linklike" data-kit="${esc(sel)}" data-i="${i}">kit completo</button>
+        ${c && c.obs ? `<small class="it-obs" title="${esc(c.obs)}">${IC('tag')} ${esc(c.obs.slice(0, 80))}${c.obs.length > 80 ? '…' : ''}</small>` : ''}</div>
+      <div class="it-chips">${chips}</div></div>`;
+  }).join('')}</div>`;
+}
+
 // ================================================================== editor (nova folha ou existente)
 function renderFolhaEditor(F, imgs, opt = {}) {
   const el = $('#mod-receb');
@@ -763,7 +820,7 @@ function renderFolhaEditor(F, imgs, opt = {}) {
       <datalist id="rbDlLocal"></datalist><datalist id="rbDlSelb"></datalist></div>`;
   const opcoes = k => [...new Set([...F.linhas.map(l => l[k]).filter(Boolean), ...((RB.vocab && RB.vocab[k]) || [])])].slice(0, 500).map(v => `<option value="${esc(v)}">`).join('');
   const listas = () => { $('#rbDlLocal').innerHTML = opcoes('local'); $('#rbDlSelb').innerHTML = opcoes('selb'); };
-  if (!RB.vocab) carregarVocab().then(listas).catch(() => {});
+  if (!RB.vocab) carregarVocab().then(() => { listas(); desenhar(); }).catch(() => {}); // cadastro dos SELBs: redesenha os itens
   const marcarSujo = () => { RB.dirty = true; };
   const desenhar = () => {
     const box = $('#rbLinhas');
@@ -797,6 +854,7 @@ function renderFolhaEditor(F, imgs, opt = {}) {
           <label class="chk"><input type="checkbox" data-rev="${i}" ${l.revisado ? 'checked' : ''}> conferida</label>
           <button class="btn ghost small" data-del="${i}">Remover</button></div>
         <div class="rb-campos">${CAMPOS.map(campo).join('')}</div>
+        ${itensEditor(l, i)}
         ${src ? `<figure class="rb-fig"><img class="rb-strip" src="${src}" alt="Foto da linha ${l.n}" title="Clique para ampliar">
           <figcaption>Foto da linha na folha${NA_IMAGEM ? ` (${esc(NA_IMAGEM)})` : ''} · clique para ampliar</figcaption></figure>` : ''}</div>`;
     }).join('');
@@ -827,15 +885,43 @@ function renderFolhaEditor(F, imgs, opt = {}) {
       l.dica.local = { ...d, tipo: 'historico', texto: l.local }; l.local = d.valor; marcarSujo(); desenhar();
     }));
     // SELB digitado/alterado: busca o local no histórico (sem perder o foco de quem estava digitando)
+    // itens entregues: marcar/desmarcar, quantidade, kit completo
+    box.querySelectorAll('input[data-it]').forEach(cb => cb.addEventListener('change', () => {
+      const l = F.linhas[+cb.dataset.i], { selb, item } = cb.dataset;
+      l.itens = (l.itens || []).filter(it => !(it.selb === selb && it.item === item));
+      if (cb.checked) {
+        const qtd = Math.max(1, Math.min(99, +cb.closest('.it-chip').querySelector('.it-qtd').value || 1));
+        l.itens.push({ selb, item, qtd, tipo: item === 'caixa' ? '' : (cadSelb(selb) || {}).suprimento === 'toner' ? 'toner' : 'tinta' });
+      }
+      cb.closest('.it-chip').classList.toggle('on', cb.checked); marcarSujo();
+    }));
+    box.querySelectorAll('.it-qtd').forEach(q => q.addEventListener('input', () => {
+      const cb = q.closest('.it-chip').querySelector('input[data-it]'), l = F.linhas[+cb.dataset.i];
+      const it = (l.itens || []).find(x => x.selb === cb.dataset.selb && x.item === cb.dataset.item);
+      if (it) { it.qtd = Math.max(1, Math.min(99, +q.value || 1)); marcarSujo(); }
+    }));
+    box.querySelectorAll('[data-kit]').forEach(b => b.addEventListener('click', e => {
+      e.preventDefault();
+      const l = F.linhas[+b.dataset.i], selb = b.dataset.kit, tipo = (cadSelb(selb) || {}).suprimento === 'toner' ? 'toner' : 'tinta';
+      const tem = new Set((l.itens || []).filter(it => it.selb === selb).map(it => it.item));
+      l.itens = l.itens || [];
+      for (const item of suprimentosDe(selb)) if (!tem.has(item)) l.itens.push({ selb, item, qtd: 1, tipo: item === 'caixa' ? '' : tipo });
+      marcarSujo(); desenhar();
+    }));
     box.querySelectorAll('input[data-k="selb"]').forEach(inp => inp.addEventListener('change', () => {
       const l = F.linhas[+inp.dataset.i];
+      const selbAntes = l.selb;
       l.selb = inp.value = normSelbs(inp.value);
+      // itens de SELB que saiu da linha deixam de valer
+      const meus = new Set(selbsDe(l.selb).map(x => x.toUpperCase()));
+      if (l.itens) l.itens = l.itens.filter(it => meus.has(it.selb));
       const lab = inp.closest('label'), nb = lab.querySelector('[data-nsel]'), n = selbsDe(l.selb).length;
       if (nb) nb.remove();
       if (n > 1) { const bd = document.createElement('span'); bd.className = 'badge'; bd.textContent = `${n} SELBs`; bd.setAttribute('data-nsel', ''); lab.firstChild.after(' ', bd); }
       const antes = JSON.stringify([l.local, l.dica && l.dica.local]);
       aplicarHistorico(l, F);
-      if (JSON.stringify([l.local, l.dica && l.dica.local]) === antes) return;
+      // redesenha se o local mudou pelo histórico ou se mudaram os SELBs (seção de itens)
+      if (JSON.stringify([l.local, l.dica && l.dica.local]) === antes && selbAntes === l.selb) return;
       marcarSujo();
       // "change" dispara no meio da troca de foco: redesenha depois, devolvendo o foco ao campo para onde o usuário foi
       setTimeout(() => {

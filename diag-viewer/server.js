@@ -21,6 +21,7 @@
   - .../api/recebimentos/:id/anexos[/:aid]   foto original e imagem retificada da folha
   - GET/POST /api/receb-locais, PUT/DELETE /api/receb-locais/:id   cadastro de locais (endereço completo)
   - POST /api/recebimentos/lote     corrige/apaga um local ou SELB em todas as folhas
+  - GET /api/receb-selbs, PUT/DELETE /api/receb-selbs/:selb   cadastro dos SELBs (equipamento, cores, tinta/toner)
   - GET /api/ocr/saude, POST /api/ocr   repasse ao serviço diag-ocr (TrOCR), se OCR_URL estiver definido
   - GET /api/treino, PUT /api/treino/config, POST /api/treino/exemplos, POST /api/treino/esquecer,
     GET /api/treino/exportar.zip, DELETE /api/treino   modo treinamento (aprender com as correções)
@@ -417,6 +418,7 @@ async function laudoRoute(req, res, url, id) {
 // Cada folha: várias linhas (SELB, data, local, CPF, nome). A leitura é feita no navegador;
 // o servidor guarda o resultado conferido, a foto original e a imagem retificada (anexos).
 const COLS_RECEB = ['selb', 'data', 'local', 'cpf', 'nome'];
+const ITENS_RECEB = ['preto', 'azul', 'magenta', 'amarelo', 'caixa']; // cores (azul = ciano) e caixa de manutenção
 // mesma regra do navegador para separar vários SELBs numa entrega ("A123, A124")
 const RecebOCR = require(path.join(WEB, 'receb-ocr.js'));
 function sanitizeFolha(b) {
@@ -432,8 +434,13 @@ function sanitizeFolha(b) {
       o.lido = {};
       if (l && l.lido && typeof l.lido === 'object') for (const k of ['selb', 'data', 'local']) if (l.lido[k] != null) o.lido[k] = txt(l.lido[k], 300);
       o.motor = ['servidor', 'navegador'].includes(l && l.motor) ? l.motor : '';
+      // itens entregues (tintas/toners por cor e caixa de manutenção), por SELB da linha
+      o.itens = (Array.isArray(l && l.itens) ? l.itens : []).slice(0, 80).map(it => ({
+        selb: txt(it && it.selb, 40).toUpperCase().trim(), item: ITENS_RECEB.includes(it && it.item) ? it.item : '',
+        qtd: Math.max(1, Math.min(99, parseInt(it && it.qtd, 10) || 1)), tipo: ['tinta', 'toner'].includes(it && it.tipo) ? it.tipo : '',
+      })).filter(it => it.item);
       return o;
-    }).filter(l => l.escrita || COLS_RECEB.some(k => l[k])), // escrita: linha preenchida só com nome/assinatura também conta
+    }).filter(l => l.escrita || COLS_RECEB.some(k => l[k]) || l.itens.length), // escrita: linha preenchida só com nome/assinatura também conta
     grade: null,
   };
   // posições das linhas na imagem retificada (para mostrar o recorte de cada linha)
@@ -598,6 +605,8 @@ async function loteRoute(req, res, url) {
           const nova = [];
           for (const x of lista) { const v = igual(x, de) ? novoValor : x; if (v && !nova.some(y => igual(y, v))) nova.push(v); }
           l.selb = RecebOCR.juntarSelbs(nova); c++;
+          // itens entregues acompanham o SELB (apagado: os itens dele saem da linha)
+          if (Array.isArray(l.itens)) l.itens = l.itens.map(it => igual(it.selb, de) ? { ...it, selb: novoValor } : it).filter(it => it.selb);
           if (!l.selb) l.revisado = false;
           if (l.conf) delete l.conf.selb;
           continue;
@@ -615,8 +624,67 @@ async function loteRoute(req, res, url) {
     });
     if (mudou) { linhas += mudou; folhas++; }
   }
+  // SELB corrigido: o cadastro vai junto (se o SELB certo ainda não tiver cadastro)
+  if (campo === 'selb' && novoValor) {
+    await withLock('receb-selbs', async () => {
+      const db = await lerSelbsCad();
+      const velho = db.selbs.find(x => igual(x.selb, de));
+      if (velho && !db.selbs.some(x => igual(x.selb, novoValor))) { velho.selb = novoValor; velho.atualizadoEm = new Date().toISOString(); await writeJsonAtomic(SELBS_FILE, db); }
+    });
+  }
   await audit({ acao: 'recebimentos_lote', campo, de, para: novoValor, selb: soSelb, linhas, folhas, ip: ipOf(req) });
   json(res, 200, { linhas, folhas });
+}
+
+// ------------------------------------------------------------------ cadastro dos SELBs (impressoras/scanners)
+const SELBS_FILE = path.join(RDIR, 'selbs.json');
+const TIPOS_EQUIP = ['impressora', 'multifuncional', 'scanner', 'outro'];
+async function lerSelbsCad() { try { return JSON.parse(await fsp.readFile(SELBS_FILE, 'utf8')); } catch { return { selbs: [], removidos: [] }; } }
+function sanitizeSelbCad(b) {
+  const t = (k, max) => txt(b && b[k], max).replace(/[\r\n\t]+/g, ' ').trim();
+  const cor = b && b.cor === 'pb' ? 'pb' : 'colorida';
+  const suprimento = ['tinta', 'toner', 'nenhum'].includes(b && b.suprimento) ? b.suprimento : 'tinta';
+  let cores = (Array.isArray(b && b.cores) ? b.cores : []).filter(c => ['preto', 'azul', 'magenta', 'amarelo'].includes(c));
+  if (cor === 'pb') cores = ['preto'];
+  if (suprimento === 'nenhum') cores = [];
+  return {
+    tipo: TIPOS_EQUIP.includes(b && b.tipo) ? b.tipo : 'impressora', marca: t('marca', 80), modelo: t('modelo', 120), serie: t('serie', 80),
+    cor, suprimento, cores: [...new Set(cores)], caixa: !!(b && b.caixa), obs: txt(b && b.obs, 2000),
+  };
+}
+async function selbsRoute(req, res, url, chave) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  const ip = ipOf(req);
+  if (!chave) {
+    if (req.method === 'GET') return json(res, 200, (await lerSelbsCad()).selbs);
+    req.resume(); return json(res, 405, { erro: 'Método não permitido.' });
+  }
+  let selb;
+  try { selb = decodeURIComponent(chave).toUpperCase().trim().slice(0, 40); } catch { selb = ''; }
+  if (!selb || RecebOCR.separarSelbs(selb).length !== 1) { req.resume(); return json(res, 400, { erro: 'SELB inválido.' }); }
+  let body = {};
+  if (req.method === 'PUT') { try { body = await readJsonBody(req, 20000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); } }
+  const out = await withLock('receb-selbs', async () => {
+    const db = await lerSelbsCad();
+    const i = db.selbs.findIndex(x => chaveSelbRec(x.selb) === chaveSelbRec(selb));
+    const agora = new Date().toISOString();
+    if (req.method === 'PUT') {
+      const novo = { selb, ...sanitizeSelbCad(body), criadoEm: i >= 0 ? db.selbs[i].criadoEm : agora, atualizadoEm: agora };
+      if (i >= 0) db.selbs[i] = novo; else db.selbs.push(novo);
+      await writeJsonAtomic(SELBS_FILE, db);
+      return { code: 200, obj: novo, audit: { acao: 'selb_cadastrado', selb } };
+    }
+    if (req.method === 'DELETE') {
+      if (i < 0) return { code: 404, erro: 'SELB sem cadastro.' };
+      const [rem] = db.selbs.splice(i, 1);
+      db.removidos = [...(db.removidos || []), { ...rem, removidoEm: agora, removidoPorIp: ip }];
+      await writeJsonAtomic(SELBS_FILE, db);
+      return { code: 200, obj: { ok: true }, audit: { acao: 'selb_cadastro_removido', selb } };
+    }
+    return { code: 405, erro: 'Método não permitido.' };
+  });
+  if (out.audit) await audit({ ...out.audit, ip });
+  return json(res, out.code, out.erro ? { erro: out.erro } : out.obj);
 }
 
 // ------------------------------------------------------------------ OCR no servidor (repasse ao diag-ocr)
@@ -1299,6 +1367,8 @@ const server = http.createServer(async (req, res) => {
     if (oc) return await ocrRoute(req, res, url, oc[1]);
     const tr = p.match(/^\/api\/treino(?:\/(config|exemplos|esquecer|exportar\.zip))?$/);
     if (tr) return await treinoRoute(req, res, url, tr[1]);
+    const sc = p.match(/^\/api\/receb-selbs(?:\/([^/]+))?$/);
+    if (sc) return await selbsRoute(req, res, url, sc[1]);
     const lc = p.match(/^\/api\/receb-locais(?:\/([^/]+))?$/);
     if (lc) return await locaisRoute(req, res, url, lc[1]);
     const rr = p.match(/^\/api\/recebimentos(?:\/([^/]+))?$/);
