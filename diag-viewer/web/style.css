@@ -458,3 +458,13 @@ html.tema-trocando, html.tema-trocando *, html.tema-trocando *::before, html.tem
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+/* interruptor (modo treinamento) */
+.rb-switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+.rb-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.rb-switch span { width: 40px; height: 22px; border-radius: 999px; background: var(--line-2); position: relative; transition: background-color .2s; flex: none; }
+.rb-switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: var(--shadow-sm); transition: transform .2s; }
+.rb-switch input:checked + span { background: var(--ok); }
+.rb-switch input:checked + span::after { transform: translateX(18px); }
+.rb-switch input:focus-visible + span { box-shadow: var(--focus); }
+.rb-motor { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }
+.rb-motor-st { margin: 6px 0 0; font-size: 12.5px; }

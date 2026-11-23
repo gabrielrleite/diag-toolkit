@@ -21,6 +21,9 @@
   - .../api/recebimentos/:id/anexos[/:aid]   foto original e imagem retificada da folha
   - GET/POST /api/receb-locais, PUT/DELETE /api/receb-locais/:id   cadastro de locais (endereço completo)
   - POST /api/recebimentos/lote     corrige/apaga um local ou SELB em todas as folhas
+  - GET /api/ocr/saude, POST /api/ocr   repasse ao serviço diag-ocr (TrOCR), se OCR_URL estiver definido
+  - GET /api/treino, PUT /api/treino/config, POST /api/treino/exemplos, POST /api/treino/esquecer,
+    GET /api/treino/exportar.zip, DELETE /api/treino   modo treinamento (aprender com as correções)
   Sem dependencias externas: so Node.js.
 */
 const http = require('http');
@@ -37,6 +40,7 @@ const WEB = path.join(__dirname, 'web');
 const UPLOAD_TOKEN = process.env.UPLOAD_TOKEN || '';
 const READ_TOKEN = process.env.READ_TOKEN || '';
 const MAX_BYTES = (+process.env.MAX_MB || 500) * 1048576;
+const OCR_URL = (process.env.OCR_URL || '').replace(/\/$/, ''); // serviço diag-ocr (ex.: http://ocr:8000)
 const DIR = path.join(DATA, 'coletas');
 const ID_RE = /^\d{8}T\d{6}Z-[0-9a-f]{6}$/;
 const AID_RE = /^[0-9a-f]{12}$/;
@@ -424,6 +428,10 @@ function sanitizeFolha(b) {
       o.selb = RecebOCR.juntarSelbs(RecebOCR.separarSelbs(o.selb).map(x => x.toUpperCase().slice(0, 40)).slice(0, 30));
       o.dataIso = /^\d{4}-\d{2}-\d{2}$/.test((l && l.dataIso) || '') ? l.dataIso : '';
       for (const k of COLS_RECEB) { const c = l && l.conf && +l.conf[k]; if (c >= 0 && c <= 100) o.conf[k] = Math.round(c); }
+      // leitura original do OCR e motor usado (modo treinamento: compara com o texto conferido)
+      o.lido = {};
+      if (l && l.lido && typeof l.lido === 'object') for (const k of ['selb', 'data', 'local']) if (l.lido[k] != null) o.lido[k] = txt(l.lido[k], 300);
+      o.motor = ['servidor', 'navegador'].includes(l && l.motor) ? l.motor : '';
       return o;
     }).filter(l => l.escrita || COLS_RECEB.some(k => l[k])), // escrita: linha preenchida só com nome/assinatura também conta
     grade: null,
@@ -609,6 +617,150 @@ async function loteRoute(req, res, url) {
   }
   await audit({ acao: 'recebimentos_lote', campo, de, para: novoValor, selb: soSelb, linhas, folhas, ip: ipOf(req) });
   json(res, 200, { linhas, folhas });
+}
+
+// ------------------------------------------------------------------ OCR no servidor (repasse ao diag-ocr)
+async function ocrRoute(req, res, url, acao) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  if (!OCR_URL) { req.resume(); return json(res, acao === 'saude' ? 200 : 503, { estado: 'desativado', erro: 'OCR do servidor não configurado (OCR_URL).' }); }
+  try {
+    if (acao === 'saude') {
+      const r = await fetch(OCR_URL + '/saude', { signal: AbortSignal.timeout(4000) });
+      return json(res, 200, await r.json());
+    }
+    if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+    const corpo = await lerCorpo(req, 20 * 1048576);
+    const r = await fetch(OCR_URL + '/ocr', { method: 'POST', body: corpo, headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(300000) });
+    return json(res, r.status, await r.json());
+  } catch (e) {
+    return json(res, acao === 'saude' ? 200 : 502, { estado: 'indisponivel', erro: 'Serviço de OCR indisponível.', detalhe: String(e.message || e).slice(0, 200) });
+  }
+}
+
+// ------------------------------------------------------------------ modo treinamento (aprender com as correções)
+// Cada célula conferida (Local/SELB/Data: o que o OCR leu, o texto final e, se houver, o recorte da imagem)
+// vira um exemplo. Daí saem as estatísticas de acerto e as "regras": leituras que já foram corrigidas
+// antes são corrigidas sozinhas. CPF e nome nunca entram (não são lidos).
+const TDIR = path.join(DATA, 'treino');
+fs.mkdirSync(path.join(TDIR, 'img'), { recursive: true });
+const TEX = path.join(TDIR, 'exemplos.json'), TCFG = path.join(TDIR, 'config.json');
+const CAMPOS_TREINO = ['local', 'selb', 'data'];
+const lerJson = async (f, padrao) => { try { return JSON.parse(await fsp.readFile(f, 'utf8')); } catch { return padrao; } };
+const normTreino = (campo, v) => campo === 'selb' ? chaveSelbRec(v) : normRec(v);
+function semanaIso(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dia = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - dia);
+  const ini = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return `${t.getUTCFullYear()}-S${String(Math.ceil(((t - ini) / 86400000 + 1) / 7)).padStart(2, '0')}`;
+}
+function resumoTreino(ex, cfg) {
+  const lista = Object.values(ex);
+  const porCampo = {}, porMotor = {}, porSemana = {}, grupos = new Map();
+  for (const e of lista) {
+    const certo = normTreino(e.campo, e.lido) === normTreino(e.campo, e.final);
+    for (const [obj, k] of [[porCampo, e.campo], [porMotor, e.motor || '?'], [porSemana, semanaIso(new Date(e.quando))]]) {
+      const o = obj[k] || (obj[k] = { n: 0, certos: 0 }); o.n++; if (certo) o.certos++;
+    }
+    if (e.ignorado || !e.lido) continue;
+    const g = e.campo + '|' + normTreino(e.campo, e.lido);
+    const G = grupos.get(g) || { campo: e.campo, lido: e.lido, total: 0, finais: new Map() };
+    G.total++; G.finais.set(e.final, (G.finais.get(e.final) || 0) + 1); grupos.set(g, G);
+  }
+  // regra: a mesma leitura foi corrigida para o mesmo texto na maioria (60%+) das vezes
+  const regras = [];
+  for (const G of grupos.values()) {
+    const [final, n] = [...G.finais.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (normTreino(G.campo, final) === normTreino(G.campo, G.lido) || n / G.total < 0.6) continue;
+    regras.push({ campo: G.campo, lido: G.lido, final, n, total: G.total });
+  }
+  regras.sort((a, b) => b.n - a.n);
+  const memoria = {};
+  for (const r of regras) (memoria[r.campo] = memoria[r.campo] || {})[normTreino(r.campo, r.lido)] = { final: r.final, n: r.n };
+  return {
+    ativo: cfg.ativo !== false, total: lista.length, comImagem: lista.filter(e => e.img).length,
+    porCampo, porMotor, porSemana: Object.entries(porSemana).sort().map(([semana, v]) => ({ semana, ...v })).slice(-26),
+    regras: regras.slice(0, 500), memoria,
+  };
+}
+async function treinoRoute(req, res, url, acao) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  const ip = ipOf(req);
+  const cfg = await lerJson(TCFG, { ativo: true });
+  if (!acao && req.method === 'GET') return json(res, 200, resumoTreino(await lerJson(TEX, {}), cfg));
+  if (acao === 'config' && req.method === 'PUT') {
+    let b; try { b = await readJsonBody(req); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+    await writeJsonAtomic(TCFG, { ...cfg, ativo: !!b.ativo });
+    await audit({ acao: 'treino_config', ativo: !!b.ativo, ip });
+    return json(res, 200, { ativo: !!b.ativo });
+  }
+  if (acao === 'exemplos' && req.method === 'POST') {
+    let b; try { b = await readJsonBody(req, 8 * 1048576); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+    if (cfg.ativo === false) return json(res, 200, { gravados: 0, ignorado: 'modo treinamento desligado' });
+    const novos = (Array.isArray(b.exemplos) ? b.exemplos : []).slice(0, 500);
+    const gravados = await withLock('treino', async () => {
+      const ex = await lerJson(TEX, {});
+      let n = 0;
+      for (const e of novos) {
+        const campo = CAMPOS_TREINO.includes(e && e.campo) ? e.campo : '';
+        const chave = txt(e && e.chave, 80).replace(/[^\w:~-]/g, '');
+        if (!campo || !chave) continue;
+        const atual = ex[chave] || {};
+        const reg = {
+          chave, campo, lido: txt(e.lido, 300).trim(), final: txt(e.final, 300).trim(), motor: txt(e.motor, 20),
+          conf: Math.max(0, Math.min(100, +e.conf || 0)), quando: new Date().toISOString(), img: atual.img || '',
+        };
+        // recorte da célula (PNG/JPEG pequeno, em base64): guardado para estatística e exportação
+        const m = typeof e.img === 'string' && e.img.match(/^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/);
+        if (m && m[2].length < 400000) {
+          const buf = Buffer.from(m[2], 'base64');
+          const nome = crypto.createHash('sha256').update(buf).digest('hex').slice(0, 20) + (m[1] === 'png' ? '.png' : '.jpg');
+          await fsp.writeFile(path.join(TDIR, 'img', nome), buf);
+          reg.img = nome;
+        }
+        ex[chave] = reg; n++;
+      }
+      if (n) await writeJsonAtomic(TEX, ex);
+      return n;
+    });
+    return json(res, 200, { gravados });
+  }
+  if (acao === 'esquecer' && req.method === 'POST') {
+    let b; try { b = await readJsonBody(req); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+    const campo = CAMPOS_TREINO.includes(b.campo) ? b.campo : '', alvo = normTreino(campo, txt(b.lido, 300));
+    if (!campo || !alvo) return json(res, 400, { erro: 'Informe o campo e a leitura.' });
+    const n = await withLock('treino', async () => {
+      const ex = await lerJson(TEX, {}); let c = 0;
+      for (const e of Object.values(ex)) if (e.campo === campo && normTreino(campo, e.lido) === alvo && !e.ignorado) { e.ignorado = true; c++; }
+      if (c) await writeJsonAtomic(TEX, ex);
+      return c;
+    });
+    await audit({ acao: 'treino_regra_esquecida', campo, lido: txt(b.lido, 300), exemplos: n, ip });
+    return json(res, 200, { exemplos: n });
+  }
+  if (acao === 'exportar.zip' && req.method === 'GET') {
+    // conjunto de dados (imagens + rótulos) para treinar um modelo no futuro
+    const ex = Object.values(await lerJson(TEX, {})).filter(e => e.img && e.final);
+    const arquivos = [], linhas = ['arquivo\tcampo\ttexto\tlido_pelo_ocr\tmotor'];
+    for (const e of ex) {
+      const buf = await fsp.readFile(path.join(TDIR, 'img', e.img)).catch(() => null);
+      if (!buf) continue;
+      arquivos.push({ nome: 'imagens/' + e.img, dados: buf });
+      linhas.push([e.img, e.campo, e.final, e.lido, e.motor].map(v => String(v).replace(/[\t\r\n]/g, ' ')).join('\t'));
+    }
+    arquivos.push({ nome: 'rotulos.tsv', dados: Buffer.from(linhas.join('\n') + '\n', 'utf8') });
+    const zip = criarZip(arquivos);
+    await audit({ acao: 'treino_exportado', exemplos: arquivos.length - 1, ip });
+    res.writeHead(200, { ...SEC, 'Content-Type': 'application/zip', 'Content-Length': zip.length, 'Cache-Control': 'no-store',
+      'Content-Disposition': `attachment; filename="treino-ocr-${new Date().toISOString().slice(0, 10)}.zip"` });
+    return res.end(zip);
+  }
+  if (!acao && req.method === 'DELETE') {
+    // apaga os exemplos (o arquivo fica como .removido, para auditoria)
+    await withLock('treino', async () => { await fsp.rename(TEX, TEX + '.' + Date.now() + '.removido').catch(() => {}); });
+    await audit({ acao: 'treino_apagado', ip });
+    return json(res, 200, { ok: true });
+  }
+  req.resume(); json(res, 405, { erro: 'Método não permitido.' });
 }
 
 // ------------------------------------------------------------------ modelos de laudo
@@ -1129,7 +1281,7 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   try {
     if (p === '/api/info' && req.method === 'GET') {
-      return json(res, 200, { envioAtivo: !!UPLOAD_TOKEN, leituraProtegida: !!READ_TOKEN, limiteMB: MAX_BYTES / 1048576 });
+      return json(res, 200, { envioAtivo: !!UPLOAD_TOKEN, leituraProtegida: !!READ_TOKEN, limiteMB: MAX_BYTES / 1048576, ocrServidor: !!OCR_URL });
     }
     if (p === '/api/coletas' && req.method === 'POST') return await upload(req, res, url);
     if (p === '/api/coletas' && req.method === 'GET') {
@@ -1143,6 +1295,10 @@ const server = http.createServer(async (req, res) => {
     const ra = p.match(/^\/api\/recebimentos\/([^/]+)\/anexos(?:\/([^/]+))?$/);
     if (ra) return await anexoRoute(req, res, url, owner('receb', ra[1]), ra[2]);
     if (p === '/api/recebimentos/lote') return await loteRoute(req, res, url);
+    const oc = p.match(/^\/api\/ocr(?:\/(saude))?$/);
+    if (oc) return await ocrRoute(req, res, url, oc[1]);
+    const tr = p.match(/^\/api\/treino(?:\/(config|exemplos|esquecer|exportar\.zip))?$/);
+    if (tr) return await treinoRoute(req, res, url, tr[1]);
     const lc = p.match(/^\/api\/receb-locais(?:\/([^/]+))?$/);
     if (lc) return await locaisRoute(req, res, url, lc[1]);
     const rr = p.match(/^\/api\/recebimentos(?:\/([^/]+))?$/);

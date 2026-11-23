@@ -4,7 +4,13 @@
 #   Repository URL:       https://github.com/gabrielrleite/diag-toolkit
 #   Repository reference: refs/heads/main
 #   Compose path:         portainer-stack.yml
-# Environment variables: UPLOAD_TOKEN e READ_TOKEN (obrigatórios); PORTA, MAX_MB, ANEXO_MAX_MB, VERSAO (opcionais).
+# Environment variables: UPLOAD_TOKEN e READ_TOKEN (obrigatórios); PORTA, MAX_MB, ANEXO_MAX_MB, VERSAO,
+#   OCR_MODELO, OCR_PRECISAO (opcionais).
+#
+# Serviço "ocr" (diag-ocr): lê letra à mão das folhas de recebimento com o TrOCR (ONNX Runtime, sem GPU).
+# Na 1ª execução instala as bibliotecas (~230 MB) e baixa o modelo do Hugging Face (~350 MB, q8);
+# depois fica tudo nos volumes "ocr-codigo" e "modelos". Usa ~1 GB de RAM. Se o servidor for fraco,
+# apague o serviço "ocr": a leitura volta a ser só no navegador (Tesseract).
 #
 # Não monta imagem: usa node:22-alpine e, a cada início, baixa o código da branch VERSAO (padrão main)
 # do GitHub. ATUALIZAR = reiniciar o container diag-viewer. Se o GitHub estiver fora do ar, usa a
@@ -17,10 +23,12 @@ services:
   # instalação antiga (que rodava como root). Roda, termina e fica "exited" — é normal.
   permissoes:
     image: alpine:3.20
-    command: ["chown", "-R", "1000:1000", "/data", "/app"]
+    command: ["chown", "-R", "1000:1000", "/data", "/app", "/ocr-app", "/modelos"]
     volumes:
       - coletas:/data
       - codigo:/app
+      - ocr-codigo:/ocr-app
+      - modelos:/modelos
     restart: "no"
 
   diag-viewer:
@@ -64,6 +72,7 @@ services:
       READ_TOKEN: ${READ_TOKEN:?defina READ_TOKEN nas Environment variables da stack}
       MAX_MB: ${MAX_MB:-500}
       ANEXO_MAX_MB: ${ANEXO_MAX_MB:-25}
+      OCR_URL: http://ocr:8000
       TZ: America/Sao_Paulo
     volumes:
       - coletas:/data
@@ -76,6 +85,64 @@ services:
       start_period: 3m
     restart: unless-stopped
 
+  # OCR de letra à mão (TrOCR) para a Central diag; só ela acessa (sem porta publicada)
+  ocr:
+    image: python:3.12-slim
+    container_name: diag-ocr
+    user: "1000:1000"
+    depends_on:
+      permissoes:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        URL="https://codeload.github.com/gabrielrleite/diag-toolkit/tar.gz/$${VERSAO}"
+        echo "Baixando o código ($${VERSAO}) do GitHub..."
+        rm -rf /tmp/novo && mkdir -p /tmp/novo
+        if python3 -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/tmp/codigo.tgz')" "$$URL" && tar xzf /tmp/codigo.tgz -C /tmp/novo; then
+          D=$$(echo /tmp/novo/*/diag-ocr)
+          if [ -f "$$D/servico.py" ]; then
+            rm -rf /ocr-app/novo && cp -r "$$D" /ocr-app/novo && rm -rf /ocr-app/atual && mv /ocr-app/novo /ocr-app/atual
+            echo "Código atualizado."
+          fi
+        else
+          echo "AVISO: não foi possível baixar do GitHub; usando a última versão baixada."
+        fi
+        rm -rf /tmp/novo /tmp/codigo.tgz
+        if [ ! -f /ocr-app/atual/servico.py ]; then
+          echo "ERRO: nenhuma versão do código disponível. Verifique o acesso do servidor a codeload.github.com."
+          exit 1
+        fi
+        # bibliotecas: instaladas uma vez por versão do requirements.txt
+        H=$$(md5sum /ocr-app/atual/requirements.txt | cut -c1-12)
+        V="/ocr-app/venv-$$H"
+        if [ ! -f "$$V/ok" ]; then
+          echo "Instalando as bibliotecas do OCR (só na 1ª vez, ~230 MB)..."
+          for antigo in /ocr-app/venv-*; do [ "$$antigo" != "$$V" ] && [ -d "$$antigo" ] && rm -rf "$$antigo"; done
+          python3 -m venv "$$V" && "$$V/bin/pip" install --no-cache-dir -q --disable-pip-version-check -r /ocr-app/atual/requirements.txt && touch "$$V/ok" || { echo "ERRO ao instalar as bibliotecas (acesso ao PyPI?)."; exit 1; }
+        fi
+        exec "$$V/bin/python" /ocr-app/atual/servico.py
+    environment:
+      VERSAO: ${VERSAO:-main}
+      HOME: /tmp
+      OCR_MODELO: ${OCR_MODELO:-Xenova/trocr-base-handwritten}
+      OCR_PRECISAO: ${OCR_PRECISAO:-q8}
+      OCR_DIR: /modelos
+      OCR_PORTA: 8000
+      TZ: America/Sao_Paulo
+    volumes:
+      - ocr-codigo:/ocr-app
+      - modelos:/modelos
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import sys, urllib.request; sys.exit(0 if b'pronto' in urllib.request.urlopen('http://127.0.0.1:8000/saude', timeout=3).read() else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20m
+    restart: unless-stopped
+
 volumes:
   coletas:
   codigo:
+  ocr-codigo:
+  modelos:

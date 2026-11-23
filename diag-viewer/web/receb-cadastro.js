@@ -15,7 +15,7 @@ const kSelb = t => RecebOCR.normalizar(t).replace(/ /g, '');
 
 function abasReceb(on) {
   const a = (k, rot, href) => `<a href="${href}" class="${on === k ? 'on' : ''}">${rot}</a>`;
-  return `<nav class="rb-abas">${a('entregas', 'Entregas', '#receb')}${a('locais', 'Locais', '#receb/locais')}${a('selbs', 'SELBs', '#receb/selbs')}</nav>`;
+  return `<nav class="rb-abas">${a('entregas', 'Entregas', '#receb')}${a('locais', 'Locais', '#receb/locais')}${a('selbs', 'SELBs', '#receb/selbs')}${a('treino', 'Treinamento', '#receb/treino')}</nav>`;
 }
 
 async function carregarLocais() {
@@ -263,4 +263,76 @@ async function renderSelbs() {
   $('#sbQ').addEventListener('input', e => { CAD.qSelb = e.target.value; desenhar(); });
   $('#sbMulti').addEventListener('change', e => { CAD.soMulti = e.target.checked; desenhar(); });
   desenhar();
+}
+
+// ================================================================== aba Treinamento
+const CAMPO_TXT = { local: 'Local', selb: 'SELB', data: 'Data' };
+const pct = (a, n) => n ? Math.round(a / n * 100) + '%' : '—';
+async function renderTreino() {
+  const el = $('#mod-receb');
+  el.innerHTML = abasReceb('treino') + '<div class="panel">Carregando...</div>';
+  if (!(await needServer(el))) return;
+  const [T, st] = await Promise.all([api('api/treino').then(r => r.ok ? r.json() : null).catch(() => null), estadoOcrServidor()]);
+  if (!T) { el.innerHTML = abasReceb('treino') + '<div class="panel"><p class="err">Não foi possível carregar o treinamento.</p></div>'; return; }
+  const tot = Object.values(T.porCampo).reduce((a, v) => [a[0] + v.certos, a[1] + v.n], [0, 0]);
+  const barra = (c, n) => `<div class="vol-bar" style="min-width:120px"><div style="width:${n ? Math.round(c / n * 100) : 0}%"></div></div>`;
+  const tabela = (obj, rot) => `<table><thead><tr><th class="nosort">${rot}</th><th class="nosort">Exemplos</th><th class="nosort">Lidos certo pelo OCR</th><th class="nosort"></th></tr></thead><tbody>
+    ${Object.entries(obj).map(([k, v]) => `<tr><td>${esc(rot === 'Campo' ? CAMPO_TXT[k] || k : rot === 'Leitura' ? MOTOR_TXT[k] || k : k)}</td><td>${v.n}</td><td>${pct(v.certos, v.n)}</td><td style="width:40%">${barra(v.certos, v.n)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Sem exemplos ainda.</td></tr>'}</tbody></table>`;
+  const zipUrl = `api/treino/exportar.zip${srv.token ? '?token=' + encodeURIComponent(srv.token) : ''}`;
+  el.innerHTML = abasReceb('treino') + `
+    <div class="panel">
+      <div class="head-row"><h2>Modo treinamento</h2>
+        <label class="rb-switch"><input type="checkbox" id="trAtivo" ${T.ativo ? 'checked' : ''}><span></span><b>${T.ativo ? 'Ligado' : 'Desligado'}</b></label></div>
+      <p class="muted">Com o modo ligado, cada linha <b>conferida</b> ensina o sistema: o que o OCR leu em Local, SELB e Data é comparado com o texto final.
+        Leituras que já foram corrigidas da mesma forma passam a ser corrigidas sozinhas na próxima folha (com aviso, e dá para voltar ao lido).
+        SELB bem formado nunca é trocado. Ficam guardados só os recortes dessas três células — CPF, nome e assinatura nunca entram.</p>
+      <div class="stats">
+        <div class="stat"><div class="v">${T.total}</div><div class="l">exemplos conferidos</div></div>
+        <div class="stat"><div class="v">${pct(tot[0], tot[1])}</div><div class="l">lidos certo pelo OCR</div></div>
+        <div class="stat"><div class="v">${T.regras.length}</div><div class="l">correções aprendidas</div></div>
+        <div class="stat"><div class="v">${T.comImagem}</div><div class="l">com recorte da imagem</div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="head-row"><h2>OCR do servidor</h2><span class="badge ${st.estado === 'pronto' ? 'ok' : st.estado === 'erro' ? 'bad' : 'warn'}">${esc(ESTADO_OCR_TXT[st.estado] || st.estado)}</span></div>
+      ${st.estado === 'desativado' ? `<p class="muted">O serviço <b>diag-ocr</b> (TrOCR, letra à mão) não está instalado neste servidor; a leitura usa o Tesseract do navegador. Veja <i>docs/INSTALAR-PORTAINER.txt</i>.</p>`
+        : `<p class="muted">Modelo <b>${esc(st.modelo || '—')}</b>${st.precisao ? ` (${esc(st.precisao)})` : ''}${st.detalhe ? ` · ${esc(st.detalhe)}` : ''}</p>`}
+    </div>
+    <div class="grid2">
+      <div class="panel"><h2>Acerto por campo</h2>${tabela(T.porCampo, 'Campo')}</div>
+      <div class="panel"><h2>Acerto por leitura</h2>${tabela(T.porMotor, 'Leitura')}</div>
+    </div>
+    <div class="panel"><h2>Acerto por semana</h2>${tabela(Object.fromEntries(T.porSemana.map(s => [s.semana, s])), 'Semana')}</div>
+    <div class="panel">
+      <div class="head-row"><h2>Correções aprendidas</h2></div>
+      <p class="muted">Leitura do OCR que, na maioria das vezes (60%+), foi corrigida para o mesmo texto. Se uma regra estiver errada, use <b>Esquecer</b>.</p>
+      ${!T.regras.length ? '<p class="muted">Nenhuma ainda: aparecem depois que a mesma leitura for corrigida em linhas conferidas.</p>' : `
+      <div class="tablewrap"><table><thead><tr><th class="nosort">Campo</th><th class="nosort">OCR leu</th><th class="nosort">Corrigido para</th><th class="nosort">Vezes</th><th class="nosort"></th></tr></thead><tbody>
+      ${T.regras.map((r, i) => `<tr><td>${esc(CAMPO_TXT[r.campo])}</td><td class="t">${esc(r.lido)}</td><td><b>${esc(r.final)}</b></td><td>${r.n} de ${r.total}</td>
+        <td class="acoes"><button class="btn ghost small perigo" data-esq="${i}">Esquecer</button></td></tr>`).join('')}</tbody></table></div>`}
+    </div>
+    <div class="panel">
+      <div class="head-row"><h2>Dados de treinamento</h2><div class="filters" style="margin:0">
+        <a class="btn ghost" href="${zipUrl}" download>Exportar exemplos (.zip)</a>
+        <button class="btn ghost perigo" id="trApagar">Apagar exemplos</button></div></div>
+      <p class="muted">O .zip traz os recortes e um <i>rotulos.tsv</i> (imagem, campo, texto certo, o que o OCR leu), pronto para treinar um modelo no futuro.</p>
+    </div>`;
+  $('#trAtivo').addEventListener('change', async e => {
+    const r = await api('api/treino/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ativo: e.target.checked }) }).catch(() => null);
+    if (!r || !r.ok) { alert('Não foi possível alterar.'); e.target.checked = !e.target.checked; return; }
+    RB.vocab = null; renderTreino();
+  });
+  el.querySelectorAll('[data-esq]').forEach(b => b.addEventListener('click', async () => {
+    const r0 = T.regras[+b.dataset.esq];
+    if (!confirm(`Esquecer a correção “${r0.lido}” → “${r0.final}”?`)) return;
+    const r = await api('api/treino/esquecer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campo: r0.campo, lido: r0.lido }) }).catch(() => null);
+    if (!r || !r.ok) return alert('Não foi possível esquecer.');
+    RB.vocab = null; renderTreino();
+  }));
+  $('#trApagar').addEventListener('click', async () => {
+    if (!confirm('Apagar todos os exemplos de treinamento? As correções aprendidas deixam de valer. (O servidor guarda uma cópia para auditoria.)')) return;
+    const r = await api('api/treino', { method: 'DELETE' }).catch(() => null);
+    if (!r || !r.ok) return alert('Não foi possível apagar.');
+    RB.vocab = null; renderTreino();
+  });
 }
