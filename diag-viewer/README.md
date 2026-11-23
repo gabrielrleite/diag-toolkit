@@ -22,6 +22,9 @@ Três módulos:
   - **Local pelo histórico do SELB**: se o SELB já tem entregas registradas, o local da última entrega preenche o campo quando ele está vazio ou a leitura é duvidosa (aviso "preenchido pelo histórico", com opção de voltar ao lido). Se o OCR leu outro local com boa confiança, o histórico aparece só como sugestão (*usar*). Vale também ao digitar ou corrigir o SELB; o local continua editável.
   - Data inválida e leitura com confiança < 60% ficam em vermelho. Cada linha tem *conferida*.
   - Controle: filtros por **SELB** e por **Local** (com sugestões, sem diferenciar acentos/maiúsculas; clicar num SELB ou local da tabela filtra por ele) e resumo do filtro (locais por onde o SELB passou, última entrega), busca livre por data/folha (clicar na linha abre a folha), filtro de não conferidos e exportação CSV (o mesmo SELB pode aparecer em várias entregas). Guarda a foto/PDF original (o botão abre o PDF na página da folha) e a folha retificada (anexos com SHA-256), revisões e auditoria.
+  - Aba **Locais**: cadastro de locais com endereço completo (logradouro, número, complemento, bairro, cidade/UF, CEP, referência). Os nomes cadastrados entram nas sugestões e na correção do OCR, e o endereço aparece ao passar o mouse no local da lista. Lista dos locais usados nas entregas (com ou sem cadastro), com *Cadastrar*, *Corrigir para…* (troca em todas as folhas) e *Apagar* (o campo fica vazio e a linha volta para conferência).
+  - Aba **SELBs**: cada SELB com entregas, locais e última entrega. Como SELB raramente muda de lugar, os que têm mais de um local ficam destacados (*só com mais de um local*), com *usar em todas* no local certo. *Corrigir SELB…* (ex.: B7T7 → B77), *Trocar local…* e *Apagar*.
+  - As correções em lote guardam a revisão anterior de cada folha (`.bak`) e ficam no `audit.log`.
   - Letra de forma e números costumam ser lidos bem; letra cursiva quase sempre precisa de correção manual. Outro layout de folha ou outras colunas digitadas: ajuste `FOLHA_MODELO` (`ler: true/false`) em `web/recebimentos.js`.
 - **Modelos de laudo** (Laudos › Modelos): título do documento, seções exibidas e seus nomes, testes padrão, conclusões permitidas, textos pré-preenchidos com {patrimonio}/{computador}/{setor}/{local}/{solicitante}/{chamado}/{data}, campos extras (texto, texto longo, data, lista; obrigatórios ou não), texto de encaminhamento e assinaturas adicionais. Vêm 5 modelos padrão (completo, baixa patrimonial, garantia, registro de atendimento, requisição de peças), que podem ser editados, desativados ou restaurados; novos modelos podem ser criados ou duplicados. Cada laudo guarda uma cópia do modelo usado.
 
@@ -95,6 +98,9 @@ O tráfego é HTTP. Use apenas na rede interna ou coloque atrás de um proxy HTT
 | GET/POST | /api/recebimentos[?linhas=1] | lista / cria folha de recebimento |
 | GET/PUT/DELETE | /api/recebimentos/:id | lê / atualiza (com `revisao`) / remove (fica `.removido`) |
 | ... | /api/recebimentos/:id/anexos[/:aid] | foto original e folha retificada |
+| GET/POST | /api/receb-locais | lista / cadastra local |
+| PUT/DELETE | /api/receb-locais/:id | altera / exclui (fica em `removidos`) |
+| POST | /api/recebimentos/lote | `{campo: 'local'\|'selb', de, para, selb?}` troca ou apaga (`para: ''`) em todas as folhas |
 
 Anexos, laudos, modelos e recebimentos usam o mesmo `READ_TOKEN` da interface.
 

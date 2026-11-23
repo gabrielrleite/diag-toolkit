@@ -33,15 +33,17 @@ async function renderReceb(arg) {
   }
   RB.dirty = false; RB.cur = null;
   if (arg === 'importar') return renderImportar();
+  if (arg === 'selbs') return renderSelbs();
+  if (arg && arg.split('~')[0] === 'locais') return renderLocais(arg.split('~')[1] || '');
   if (arg) { const [fid, n] = arg.split('~'); return abrirFolha(fid, +n || 0); }
   RB.imp = null;
-  el.innerHTML = '<div class="panel">Carregando...</div>';
+  el.innerHTML = abasReceb('entregas') + '<div class="panel">Carregando...</div>';
   if (!(await needServer(el))) return;
-  const r = await api('api/recebimentos?linhas=1').catch(() => null);
+  const [r] = await Promise.all([api('api/recebimentos?linhas=1').catch(() => null), carregarLocais()]);
   RB.folhas = r && r.ok ? await r.json() : [];
   const regs = RB.folhas.flatMap(f => f.linhas.map(l => ({ ...l, folha: f })));
   const pend = regs.filter(l => !l.revisado).length;
-  el.innerHTML = `
+  el.innerHTML = abasReceb('entregas') + `
     <div class="panel">
       <div class="head-row"><h2>Folhas de recebimento</h2><a class="btn" href="#receb/importar">Importar folhas (OCR)</a></div>
       <div class="stats">
@@ -91,7 +93,7 @@ async function renderReceb(arg) {
     $('#rbResumo').innerHTML = resumo;
     $('#rbRegs').innerHTML = `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Local</th><th class="nosort">SELB</th><th class="nosort">Data</th><th class="nosort">Folha</th></tr></thead><tbody>
       ${filtrados.slice(0, 1000).map(l => `<tr data-folha="${esc(l.folha.id)}~${l.n}">
-        <td>${l.local ? `<button class="linklike" data-filtro="local" data-v="${esc(l.local)}" title="Filtrar por este local">${esc(l.local)}</button>` : '—'}</td>
+        <td>${l.local ? `<button class="linklike" data-filtro="local" data-v="${esc(l.local)}" title="${esc((localCadastrado(l.local) ? enderecoTxt(localCadastrado(l.local)) + ' — ' : '') + 'clique para filtrar por este local')}">${esc(l.local)}</button>` : '—'}</td>
         <td>${l.selb ? `<button class="linklike" data-filtro="selb" data-v="${esc(l.selb)}" title="Filtrar por este SELB">${esc(l.selb)}</button>` : '—'}</td>
         <td class="t">${esc(l.data || '—')}</td>
         <td><small>${esc(l.folha.titulo || l.folha.id)} · linha ${l.n}</small>${l.revisado ? '' : ' <span class="badge warn">conferir</span>'}</td></tr>`).join('')}
@@ -152,7 +154,9 @@ async function carregarVocab() {
     if (r && r.ok) RB.folhas = await r.json();
   }
   const conta = k => { const m = new Map(); for (const f of RB.folhas) for (const l of f.linhas || []) if (l[k]) m.set(l[k], (m.get(l[k]) || 0) + 1); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); };
-  RB.vocab = { local: conta('local'), selb: conta('selb') };
+  // locais cadastrados vêm primeiro (nome oficial), depois os já usados nas folhas
+  const cad = await carregarLocais().catch(() => []);
+  RB.vocab = { local: [...new Set([...cad.map(L => L.nome), ...conta('local')])], selb: conta('selb') };
 }
 
 // ---------------------------------------------------------------- local pelo histórico do SELB
