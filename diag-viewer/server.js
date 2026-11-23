@@ -23,6 +23,7 @@
   - POST /api/recebimentos/lote     corrige/apaga um local ou SELB em todas as folhas
   - GET /api/receb-selbs, PUT/DELETE /api/receb-selbs/:selb   cadastro dos SELBs (equipamento, cores, tinta/toner)
   - GET /api/monitor, POST /api/monitor/verificar   ping das impressoras com IP (a cada MONITOR_MIN minutos)
+  - POST/DELETE /api/monitor/pausa, GET /api/monitor/historico?selb=&dias=, GET /api/monitor/quedas?dias=
   - GET /api/ocr/saude, POST /api/ocr   repasse ao serviço diag-ocr (TrOCR), se OCR_URL estiver definido
   - GET /api/treino, PUT /api/treino/config, POST /api/treino/exemplos, POST /api/treino/esquecer,
     GET /api/treino/exportar.zip, DELETE /api/treino   modo treinamento (aprender com as correções)
@@ -695,23 +696,34 @@ async function selbsRoute(req, res, url, chave) {
 }
 
 // ------------------------------------------------------------------ monitoramento das impressoras (ping)
-// A cada MONITOR_MIN minutos: 1 ping pequeno (16 bytes) por impressora com IP cadastrado. Se falhar, confirma
-// com um 2º ping e com as portas de impressora (9100/631/515) — impressora que só bloqueia ping não vira
-// alarme falso. Estado em recebimentos/monitor.json; quedas e retornos vão para o audit.log.
+// A cada MONITOR_MIN minutos: 1 ping com o MENOR pacote possível (0 bytes de dados = pacote IP de 28 bytes:
+// 20 de IP + 8 de ICMP) por impressora com IP cadastrado. Se falhar, confirma com um 2º ping e com as portas
+// de impressora (9100/631/515) — impressora que só bloqueia ping não vira alarme falso.
+// Histórico: recebimentos/monitor/ping-AAAA-MM-DD.jsonl (cada verificação, MONITOR_DIAS dias) e
+// recebimentos/monitor/quedas.json (início, fim e duração de cada queda). Pausa geral ou por SELB.
 const { execFile } = require('child_process');
 const net = require('net');
 const MONITOR_FILE = path.join(RDIR, 'monitor.json');
+const MON_DIR = path.join(RDIR, 'monitor');
+fs.mkdirSync(MON_DIR, { recursive: true });
+const QUEDAS_FILE = path.join(MON_DIR, 'quedas.json');
+const MONITOR_DIAS = Math.max(1, +process.env.MONITOR_DIAS || 30);
 const IP_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 const ipOk = ip => IP_RE.test(ip || '') && ip.split('.').every(n => +n <= 255);
-let monitor = { rodada: null, ping: null, estados: {} }; // estados[ip] = { online, desde, verificadoEm, ms, via }
-let monitorRodando = null;
-try { monitor = { ...monitor, ...JSON.parse(fs.readFileSync(MONITOR_FILE, 'utf8')) }; } catch { /* primeira vez */ }
+// estados[ip] = { online, desde, verificadoEm, ms, via }; pausa = { geral: {ate, em} | null, selbs: { SELB: {ate, em, motivo} } }
+let monitor = { rodada: null, ping: null, estados: {}, pausa: { geral: null, selbs: {} } };
+let monitorRodando = null, resumoCache = null;
+try { monitor = { ...monitor, ...JSON.parse(fs.readFileSync(MONITOR_FILE, 'utf8')) }; monitor.pausa = { geral: null, selbs: {}, ...(monitor.pausa || {}) }; } catch { /* primeira vez */ }
+const salvarMonitor = () => writeJsonAtomic(MONITOR_FILE, monitor).catch(e => console.error('monitor:', e.message));
+const diaDe = iso => iso.slice(0, 10);
+const arqPing = dia => path.join(MON_DIR, `ping-${dia}.jsonl`);
 
 function pingar(ip) {
   return new Promise(resolve => {
     if (!ipOk(ip)) return resolve({ ok: false, erro: 'ip' });
     const t0 = Date.now();
-    execFile('ping', ['-c', '1', '-W', '2', '-s', '16', ip], { timeout: 6000 }, (err, out) => {
+    // -s 0: sem dados (o ping não consegue medir o tempo sozinho; medimos aqui, aproximado)
+    execFile('ping', ['-c', '1', '-W', '2', '-s', '0', ip], { timeout: 6000 }, (err, out) => {
       if (err && err.code === 'ENOENT') return resolve({ ok: false, semPing: true });
       if (err) return resolve({ ok: false });
       const m = String(out).match(/time[=<]\s*([\d.]+)/) || String(out).match(/min\/avg\/max[^=]*=\s*([\d.]+)/);
@@ -738,41 +750,159 @@ async function verificarImpressora(ip) {
   for (const porta of [9100, 631, 515]) if (await portaAberta(ip, porta)) return { online: true, ms: null, via: 'porta ' + porta };
   return { online: false, ms: null, via: r.semPing ? 'portas' : 'ping' };
 }
-async function rodadaMonitor() {
+
+// ---- pausa
+function limparPausasVencidas() {
+  const agora = Date.now();
+  let mudou = false;
+  if (monitor.pausa.geral && monitor.pausa.geral.ate && Date.parse(monitor.pausa.geral.ate) <= agora) { monitor.pausa.geral = null; mudou = true; }
+  for (const [k, v] of Object.entries(monitor.pausa.selbs)) if (v.ate && Date.parse(v.ate) <= agora) { delete monitor.pausa.selbs[k]; mudou = true; }
+  return mudou;
+}
+const selbPausado = selb => !!monitor.pausa.selbs[chaveSelbRec(selb)];
+
+// ---- quedas
+async function lerQuedas() { try { return JSON.parse(await fsp.readFile(QUEDAS_FILE, 'utf8')); } catch { return []; } }
+async function registrarQuedas(mudancas) {
+  if (!mudancas.length) return;
+  await withLock('monitor-quedas', async () => {
+    const q = await lerQuedas();
+    for (const m of mudancas) {
+      const aberta = q.find(x => x.ip === m.ip && !x.fim);
+      if (!m.online && !aberta) q.push({ id: crypto.randomBytes(4).toString('hex'), ip: m.ip, selb: m.selb, inicio: m.quando, fim: null, min: null });
+      if (m.online && aberta) { aberta.fim = m.quando; aberta.min = Math.max(0, Math.round((Date.parse(m.quando) - Date.parse(aberta.inicio)) / 60000)); }
+    }
+    const limite = Date.now() - 400 * 86400000; // guarda ~1 ano de quedas
+    await writeJsonAtomic(QUEDAS_FILE, q.filter(x => !x.fim || Date.parse(x.fim) > limite));
+  });
+}
+
+async function rodadaMonitor({ forcar = false } = {}) {
   if (monitorRodando) return monitorRodando;
   monitorRodando = (async () => {
+    if (limparPausasVencidas()) await salvarMonitor();
+    if (monitor.pausa.geral && !forcar) return; // monitoramento pausado
     const cads = (await lerSelbsCad()).selbs.filter(c => ipOk(c.ip));
-    const ips = [...new Set(cads.map(c => c.ip))];
-    const agora = new Date().toISOString();
-    const fila = [...ips];
+    // IP é verificado se ao menos um SELB dele não estiver pausado
+    const porIp = new Map();
+    for (const c of cads) (porIp.get(c.ip) || porIp.set(c.ip, []).get(c.ip)).push(c.selb);
+    const ips = [...porIp.keys()].filter(ip => porIp.get(ip).some(s => !selbPausado(s)));
+    const fila = [...ips], linhas = [], mudancas = [];
     const trabalhar = async () => {
       while (fila.length) {
         const ip = fila.shift();
         const r = await verificarImpressora(ip);
+        const quando = new Date().toISOString(), sel = porIp.get(ip).join(', ');
         const ant = monitor.estados[ip];
         const mudou = !ant || ant.online !== r.online;
-        monitor.estados[ip] = { online: r.online, desde: mudou ? agora : ant.desde, verificadoEm: new Date().toISOString(), ms: r.ms, via: r.via };
+        monitor.estados[ip] = { online: r.online, desde: mudou ? quando : ant.desde, verificadoEm: quando, ms: r.ms, via: r.via };
+        linhas.push(JSON.stringify({ t: quando, ip, s: sel, on: r.online ? 1 : 0, ms: r.ms, v: r.via }));
         if ((ant && mudou) || (!ant && !r.online)) { // queda/retorno; ou já fora do ar na 1ª verificação
-          const sel = cads.filter(c => c.ip === ip).map(c => c.selb).join(', ');
+          mudancas.push({ ip, selb: sel, online: r.online, quando });
           await audit({ acao: r.online ? 'impressora_voltou' : 'impressora_caiu', ip, selb: sel });
           console.log(`[monitor] ${sel} (${ip}) ${r.online ? 'voltou' : 'FORA DO AR'}`);
         }
       }
     };
     await Promise.all(Array.from({ length: Math.min(16, ips.length) }, trabalhar)); // até 16 ao mesmo tempo
-    for (const ip of Object.keys(monitor.estados)) if (!ips.includes(ip)) delete monitor.estados[ip]; // IP removido do cadastro
+    if (linhas.length) await fsp.appendFile(arqPing(diaDe(new Date().toISOString())), linhas.join('\n') + '\n');
+    await registrarQuedas(mudancas);
+    for (const ip of Object.keys(monitor.estados)) if (!porIp.has(ip)) delete monitor.estados[ip]; // IP saiu do cadastro
     monitor.rodada = new Date().toISOString();
-    await writeJsonAtomic(MONITOR_FILE, monitor).catch(e => console.error('monitor:', e.message));
+    resumoCache = null;
+    await salvarMonitor();
   })().finally(() => { monitorRodando = null; });
   return monitorRodando;
 }
+
+// ---- histórico
+async function lerPings(dias, filtro) {
+  const out = [], hoje = Date.now();
+  for (let d = dias - 1; d >= 0; d--) {
+    const dia = new Date(hoje - d * 86400000).toISOString().slice(0, 10);
+    const txt0 = await fsp.readFile(arqPing(dia), 'utf8').catch(() => '');
+    for (const l of txt0.split('\n')) {
+      if (!l) continue;
+      try { const o = JSON.parse(l); if (!filtro || filtro(o)) out.push(o); } catch { /* linha incompleta */ }
+    }
+  }
+  return out;
+}
+const temSelbNoPing = (o, selb) => String(o.s || '').split(', ').some(x => chaveSelbRec(x) === chaveSelbRec(selb));
+// resumo por SELB: disponibilidade 24 h / 7 dias, 48 faixas de 30 min das últimas 24 h, quedas em 7 dias
+async function resumoMonitor() {
+  if (resumoCache) return resumoCache;
+  const pings = await lerPings(8, null), agora = Date.now(), quedas = await lerQuedas();
+  const por = new Map();
+  for (const o of pings) for (const sel of String(o.s || '').split(', ')) {
+    const k = chaveSelbRec(sel); if (!k) continue;
+    (por.get(k) || por.set(k, []).get(k)).push(o);
+  }
+  const resumo = {};
+  for (const [k, lista] of por) {
+    const janela = ms => { const l = lista.filter(o => agora - Date.parse(o.t) <= ms); return l.length ? Math.round(l.filter(o => o.on).length / l.length * 1000) / 10 : null; };
+    const faixas = Array.from({ length: 48 }, () => [0, 0]);
+    for (const o of lista) {
+      const idade = agora - Date.parse(o.t);
+      if (idade > 86400000) continue;
+      const f = 47 - Math.floor(idade / 1800000);
+      if (f >= 0) { faixas[f][1]++; if (o.on) faixas[f][0]++; }
+    }
+    resumo[k] = { d24: janela(86400000), d7: janela(7 * 86400000), faixas: faixas.map(([on, n]) => n ? Math.round(on / n * 100) / 100 : null) };
+  }
+  for (const q of quedas) {
+    if (agora - Date.parse(q.inicio) > 7 * 86400000 && q.fim) continue;
+    for (const sel of String(q.selb).split(', ')) { const k = chaveSelbRec(sel); (resumo[k] = resumo[k] || { d24: null, d7: null, faixas: Array(48).fill(null) }).quedas7 = (resumo[k].quedas7 || 0) + 1; }
+  }
+  resumoCache = resumo;
+  return resumo;
+}
+// limpeza do histórico antigo (1x por dia)
+async function limparHistoricoMonitor() {
+  const limite = new Date(Date.now() - MONITOR_DIAS * 86400000).toISOString().slice(0, 10);
+  for (const n of await fsp.readdir(MON_DIR).catch(() => [])) {
+    const m = n.match(/^ping-(\d{4}-\d{2}-\d{2})\.jsonl$/);
+    if (m && m[1] < limite) await fsp.rm(path.join(MON_DIR, n), { force: true });
+  }
+}
+
 async function monitorRoute(req, res, url, acao) {
   if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  const ip = ipOf(req);
   if (acao === 'verificar') {
     if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
     req.resume();
-    await rodadaMonitor();
+    await rodadaMonitor({ forcar: true });
+  } else if (acao === 'pausa') {
+    // POST {alvo: 'todos' | SELB, horas: número | null (até retomar), motivo}; DELETE ?alvo=... retoma
+    let alvo, horas = null, motivo = '';
+    if (req.method === 'POST') {
+      let b; try { b = await readJsonBody(req); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+      alvo = txt(b.alvo, 40).trim(); horas = b.horas == null ? null : Math.max(0.25, Math.min(24 * 90, +b.horas || 1)); motivo = txt(b.motivo, 200);
+    } else if (req.method === 'DELETE') { req.resume(); alvo = txt(url.searchParams.get('alvo'), 40).trim(); }
+    else { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+    if (!alvo) return json(res, 400, { erro: 'Informe o alvo ("todos" ou um SELB).' });
+    const ate = horas ? new Date(Date.now() + horas * 3600000).toISOString() : null, em = new Date().toISOString();
+    if (alvo === 'todos') monitor.pausa.geral = req.method === 'POST' ? { ate, em, motivo } : null;
+    else if (req.method === 'POST') monitor.pausa.selbs[chaveSelbRec(alvo)] = { selb: alvo.toUpperCase(), ate, em, motivo };
+    else delete monitor.pausa.selbs[chaveSelbRec(alvo)];
+    resumoCache = null;
+    await salvarMonitor();
+    await audit({ acao: req.method === 'POST' ? 'monitor_pausado' : 'monitor_retomado', alvo, ate, motivo, ip });
+    if (req.method === 'DELETE') setTimeout(() => rodadaMonitor().catch(() => {}), 300); // retomou: verifica logo
+  } else if (acao === 'historico') {
+    // ?selb=X&dias=7 -> pings e quedas daquele SELB
+    const selb = txt(url.searchParams.get('selb'), 40).trim(), dias = Math.max(1, Math.min(MONITOR_DIAS, +url.searchParams.get('dias') || 7));
+    if (!selb) return json(res, 400, { erro: 'Informe o SELB.' });
+    const pings = (await lerPings(dias, o => temSelbNoPing(o, selb))).map(o => ({ t: o.t, on: o.on, ms: o.ms, v: o.v }));
+    const quedas = (await lerQuedas()).filter(q => String(q.selb).split(', ').some(x => chaveSelbRec(x) === chaveSelbRec(selb)) && (!q.fim || Date.now() - Date.parse(q.inicio) <= dias * 86400000));
+    return json(res, 200, { selb, dias, intervaloMin: MONITOR_MIN, pings, quedas: quedas.reverse() });
+  } else if (acao === 'quedas') {
+    const dias = Math.max(1, Math.min(400, +url.searchParams.get('dias') || 30));
+    const quedas = (await lerQuedas()).filter(q => !q.fim || Date.now() - Date.parse(q.inicio) <= dias * 86400000).reverse();
+    return json(res, 200, { dias, quedas });
   } else if (req.method !== 'GET') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+  if (limparPausasVencidas()) await salvarMonitor();
   // local de cada SELB: o da última entrega registrada
   const ultimoLocal = new Map();
   for (const f of await listFolhas(true)) for (const l of f.linhas) {
@@ -782,15 +912,21 @@ async function monitorRoute(req, res, url, acao) {
       if (!u || q >= u.q) ultimoLocal.set(k, { local: l.local, q });
     }
   }
+  const resumo = await resumoMonitor();
   const impressoras = (await lerSelbsCad()).selbs.filter(c => ipOk(c.ip)).map(c => {
-    const e = monitor.estados[c.ip] || null;
-    return { selb: c.selb, ip: c.ip, tipo: c.tipo, marca: c.marca, modelo: c.modelo, local: (ultimoLocal.get(chaveSelbRec(c.selb)) || {}).local || '',
-      online: e ? e.online : null, desde: e ? e.desde : null, verificadoEm: e ? e.verificadoEm : null, ms: e ? e.ms : null, via: e ? e.via : null };
+    const e = monitor.estados[c.ip] || null, k = chaveSelbRec(c.selb), p = monitor.pausa.selbs[k] || null, r = resumo[k] || {};
+    return { selb: c.selb, ip: c.ip, tipo: c.tipo, marca: c.marca, modelo: c.modelo, local: (ultimoLocal.get(k) || {}).local || '',
+      online: e ? e.online : null, desde: e ? e.desde : null, verificadoEm: e ? e.verificadoEm : null, ms: e ? e.ms : null, via: e ? e.via : null,
+      pausada: p ? { ate: p.ate, em: p.em, motivo: p.motivo } : null,
+      d24: r.d24 ?? null, d7: r.d7 ?? null, faixas: r.faixas || Array(48).fill(null), quedas7: r.quedas7 || 0 };
   });
-  json(res, 200, { intervaloMin: MONITOR_MIN, rodada: monitor.rodada, ping: monitor.ping, verificando: !!monitorRodando, impressoras });
+  json(res, 200, { intervaloMin: MONITOR_MIN, dias: MONITOR_DIAS, rodada: monitor.rodada, ping: monitor.ping, verificando: !!monitorRodando,
+    pausa: monitor.pausa.geral, impressoras });
 }
 setTimeout(() => rodadaMonitor().catch(e => console.error('monitor:', e.message)), 15000).unref();
 setInterval(() => rodadaMonitor().catch(e => console.error('monitor:', e.message)), MONITOR_MIN * 60000).unref();
+setTimeout(() => limparHistoricoMonitor().catch(() => {}), 60000).unref();
+setInterval(() => limparHistoricoMonitor().catch(() => {}), 86400000).unref();
 
 // ------------------------------------------------------------------ OCR no servidor (repasse ao diag-ocr)
 async function ocrRoute(req, res, url, acao) {
@@ -1472,7 +1608,7 @@ const server = http.createServer(async (req, res) => {
     if (oc) return await ocrRoute(req, res, url, oc[1]);
     const tr = p.match(/^\/api\/treino(?:\/(config|exemplos|esquecer|exportar\.zip))?$/);
     if (tr) return await treinoRoute(req, res, url, tr[1]);
-    const mo = p.match(/^\/api\/monitor(?:\/(verificar))?$/);
+    const mo = p.match(/^\/api\/monitor(?:\/(verificar|pausa|historico|quedas))?$/);
     if (mo) return await monitorRoute(req, res, url, mo[1]);
     const sc = p.match(/^\/api\/receb-selbs(?:\/([^/]+))?$/);
     if (sc) return await selbsRoute(req, res, url, sc[1]);

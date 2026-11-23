@@ -15,7 +15,7 @@ const kSelb = t => RecebOCR.normalizar(t).replace(/ /g, '');
 
 function abasReceb(on) {
   const a = (k, rot, href) => `<a href="${href}" class="${on === k ? 'on' : ''}">${rot}</a>`;
-  return `<nav class="rb-abas">${a('entregas', 'Entregas', '#receb')}${a('locais', 'Locais', '#receb/locais')}${a('selbs', 'SELBs', '#receb/selbs')}${a('treino', 'Treinamento', '#receb/treino')}</nav>`;
+  return `<nav class="rb-abas">${a('entregas', 'Entregas', '#receb')}${a('locais', 'Locais', '#receb/locais')}${a('selbs', 'SELBs', '#receb/selbs')}${a('impressoras', 'Impressoras', '#receb/impressoras')}${a('treino', 'Treinamento', '#receb/treino')}</nav>`;
 }
 
 async function carregarLocais() {
