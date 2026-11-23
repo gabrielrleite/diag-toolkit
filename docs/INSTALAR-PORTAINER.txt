@@ -3,8 +3,65 @@
   Remoção de hardware · Laudos de manutenção · Equipamentos
 ===============================================================================
 
-Método usado: imagem pronta node:22-alpine + código numa pasta do servidor.
-Não precisa montar imagem nem enviar .tar.
+Dois métodos:
+  A) PELO GITHUB (recomendado): o Portainer baixa o código do GitHub e monta
+     a imagem sozinho. Atualizar = um clique ("Pull and redeploy").
+  B) PASTA NO SERVIDOR: imagem pronta node:22-alpine + código copiado para
+     /opt/diag-viewer (passos 1 e 3 abaixo).
+Os dois usam o mesmo volume de dados: dá para trocar de B para A sem perder
+nada (veja "TROCAR DO MÉTODO B PARA O A").
+
+
+-------------------------------------------------------------------------------
+MÉTODO A - PELO GITHUB (recomendado)
+-------------------------------------------------------------------------------
+1. Gere os tokens (PASSO 2 abaixo).
+2. Portainer > Stacks > Add stack
+     Name:                 diag-viewer
+     Build method:         Repository
+     Repository URL:       https://github.com/gabrielrleite/diag-toolkit
+     Repository reference: refs/heads/main
+     Compose path:         portainer-stack.yml
+     Authentication:       desligado (repositório público)
+3. Environment variables (Add an environment variable):
+     UPLOAD_TOKEN = (token de envio)            obrigatório
+     READ_TOKEN   = (token de leitura)          obrigatório
+     PORTA        = 80     (porta no servidor; opcional, padrão 80)
+     MAX_MB       = 500    (opcional)
+     ANEXO_MAX_MB = 25     (opcional)
+4. Opcional - atualização automática: ative "GitOps updates" > Polling
+   (ex.: a cada 5m). Cada mudança na branch main é instalada sozinha.
+5. Deploy the stack. A primeira vez demora 1 a 2 minutos (monta a imagem).
+   Conferir:
+   - Containers > diag-viewer: "running" e depois "healthy".
+   - Containers > diag-viewer-permissoes-1: "exited (0)". É normal: ele só
+     acerta as permissões do volume e termina.
+   - Navegador: http://IP-DO-SERVIDOR  (pede o READ_TOKEN).
+6. Libere a porta no firewall (PASSO 4).
+
+ATUALIZAR (método A):
+  Stacks > diag-viewer > "Pull and redeploy" (ou espere o GitOps, se ativo).
+  A imagem é montada de novo com o código da main; os dados ficam no volume.
+
+TROCAR DO MÉTODO B PARA O A:
+  1. Stacks > diag-viewer (a antiga) > Delete this stack. NÃO apague o volume
+     diag-viewer_coletas (Volumes) - é ali que estão os dados.
+  2. Crie a stack pelo método A com o MESMO nome "diag-viewer" e os mesmos
+     tokens. Ela reaproveita o volume diag-viewer_coletas e corrige as
+     permissões (o método B rodava como root; o A roda como usuário node).
+  3. A pasta /opt/diag-viewer deixa de ser usada e pode ser apagada.
+
+Erros do método A:
+  "required variable UPLOAD_TOKEN is missing a value"  -> faltou a variável
+      UPLOAD_TOKEN ou READ_TOKEN nas Environment variables da stack.
+  "toomanyrequests" / "429" ao montar   -> limite de downloads do Docker Hub;
+      espere alguns minutos e faça Deploy de novo.
+  Dados não aparecem depois de trocar de método -> a stack precisa se chamar
+      exatamente "diag-viewer" para usar o volume diag-viewer_coletas.
+
+===============================================================================
+  MÉTODO B - PASTA NO SERVIDOR (passos 1 a 5)
+===============================================================================
 
 
 -------------------------------------------------------------------------------
@@ -122,7 +179,7 @@ Agente diag (agente-diag.zip) - só para assinatura digital de laudos
 
 
 -------------------------------------------------------------------------------
-ATUALIZAR O SERVIDOR
+ATUALIZAR O SERVIDOR (método B; no método A use "Pull and redeploy")
 -------------------------------------------------------------------------------
 1. Copie de novo server.js e a pasta web\ para /opt/diag-viewer
    (o mesmo comando scp do passo 1).
@@ -142,6 +199,8 @@ Volume diag-viewer_coletas (/data no container):
   modelos/            modelos de laudo (os 5 padrão são criados na 1ª execução)
   laudos/*.assinado.pdf      PDF assinado digitalmente (versão oficial)
   laudos/*.via-assinada.*    digitalização da via assinada à mão
+  recebimentos/       folhas de recebimento (OCR), revisões (.bak), anexos
+                      (foto/PDF original e folha retificada) e locais.json
   audit.log           envios, recusas, downloads, laudos criados/alterados,
                       anexos adicionados/removidos (com IP e horário)
 

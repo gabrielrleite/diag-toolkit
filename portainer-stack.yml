@@ -1,0 +1,48 @@
+# diag-viewer: stack para o Portainer, montada direto do GitHub.
+#
+# Portainer > Stacks > Add stack > Build method: Repository
+#   Repository URL:       https://github.com/gabrielrleite/diag-toolkit
+#   Repository reference: refs/heads/main
+#   Compose path:         portainer-stack.yml
+#   (repositório privado: ative Authentication com usuário do GitHub + token de acesso)
+#   Environment variables: UPLOAD_TOKEN e READ_TOKEN (obrigatórios), MAX_MB, ANEXO_MAX_MB, PORTA
+# Passo a passo completo: docs/INSTALAR-PORTAINER.txt
+#
+# Dados (coletas, laudos, recebimentos, anexos, audit.log) ficam no volume "coletas":
+# atualizar ou recriar a stack não apaga nada.
+
+services:
+  # Ajusta o dono dos dados para o usuário "node" do container (uid 1000).
+  # Necessário quando o volume veio da instalação antiga (container rodando como root).
+  # Roda, termina e fica parado ("exited") — é normal.
+  permissoes:
+    image: alpine:3.20
+    command: ["chown", "-R", "1000:1000", "/data"]
+    volumes:
+      - coletas:/data
+    restart: "no"
+
+  diag-viewer:
+    build:
+      context: ./diag-viewer
+    image: diag-viewer:latest
+    # sempre monta a imagem com o código baixado (o "Pull and redeploy" do Portainer pega a versão nova)
+    pull_policy: build
+    container_name: diag-viewer
+    depends_on:
+      permissoes:
+        condition: service_completed_successfully
+    ports:
+      - "${PORTA:-80}:8080"
+    environment:
+      UPLOAD_TOKEN: ${UPLOAD_TOKEN:?defina UPLOAD_TOKEN nas Environment variables da stack}
+      READ_TOKEN: ${READ_TOKEN:?defina READ_TOKEN nas Environment variables da stack}
+      MAX_MB: ${MAX_MB:-500}
+      ANEXO_MAX_MB: ${ANEXO_MAX_MB:-25}
+      TZ: America/Sao_Paulo
+    volumes:
+      - coletas:/data
+    restart: unless-stopped
+
+volumes:
+  coletas:

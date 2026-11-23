@@ -50,6 +50,10 @@ UPLOAD_TOKEN=... READ_TOKEN=... DATA_DIR=./data node server.js   # Node 18+
 
 Com Docker, veja `docs/INSTALAR-PORTAINER.txt` e `diag-viewer/README.md`.
 
+### Portainer direto do GitHub
+
+Stacks › Add stack › **Repository**: URL `https://github.com/gabrielrleite/diag-toolkit`, reference `refs/heads/main`, compose path **`portainer-stack.yml`**, variáveis `UPLOAD_TOKEN` e `READ_TOKEN` (opcionais: `PORTA`, `MAX_MB`, `ANEXO_MAX_MB`). Para atualizar: *Pull and redeploy* (ou GitOps updates com polling). Passo a passo em `docs/INSTALAR-PORTAINER.txt`.
+
 ## Segurança
 
 - Tokens ficam em variáveis de ambiente (`.env`, fora do repositório).
