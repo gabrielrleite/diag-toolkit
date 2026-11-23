@@ -271,9 +271,9 @@ const RecebOCR = (() => {
   }
 
   // fração de tinta (sem os restos de linha) e caixa do conteúdo
-  // tinta = bem mais escuro que o fundo da própria célula (sombra e granulado da foto não contam)
-  function tinta(G, R, q) {
-    // fundo estimado em fatias da largura de uma altura de célula (a sombra da foto varia ao longo da linha)
+  // máscara de tinta da área q (1 = traço): bem mais escuro que o fundo local, sem as linhas da grade.
+  // O fundo é estimado em fatias da largura de uma altura de célula (a sombra da foto varia ao longo da linha).
+  function mascaraTinta(G, R, q) {
     const fatia = Math.max(8, q.h), hist = new Uint32Array(256), m = new Uint8Array(q.w * q.h);
     for (let fx = q.x; fx < q.x + q.w; fx += fatia) {
       const fw = Math.min(fatia, q.x + q.w - fx);
@@ -288,6 +288,12 @@ const RecebOCR = (() => {
         if (R.g[i] < lim && !G.hm[i] && !G.vm[i]) m[(y - q.y) * q.w + (x - q.x)] = 1;
       }
     }
+    return m;
+  }
+
+  // fração de tinta (sem os restos de linha) e caixa do conteúdo
+  function tinta(G, R, q) {
+    const m = mascaraTinta(G, R, q);
     // só conta pixel de traço (com 2+ vizinhos de tinta): granulado isolado da foto fica de fora
     const porCol = new Uint32Array(q.w);
     let n = 0, y0 = Infinity, y1 = -1;
@@ -343,18 +349,43 @@ const RecebOCR = (() => {
     if (d.length !== 11) return { valor: String(s || '').trim(), ok: false, digitos: d };
     return { valor: `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`, ok: cpfValido(d), digitos: d };
   }
+  // dígitos que a letra à mão costuma confundir (para tentar corrigir dia/mês inválidos)
+  const DIGITO_PARECIDO = { 0: '689', 1: '7', 2: '7', 3: '8', 4: '9', 5: '63', 6: '058', 7: '12', 8: '036', 9: '40' };
   function limparData(s, anoPadrao = new Date().getFullYear()) {
-    const t = String(s || '').replace(/[OoQD]/g, '0').replace(/[Il|i]/g, '1');
-    let m = t.match(/(\d{1,2})\s*[/.\-\\]\s*(\d{1,2})(?:\s*[/.\-\\]\s*(\d{2,4}))?/);
-    if (!m) { const d = t.replace(/\D/g, ''); if (d.length === 8 || d.length === 6) m = [d, d.slice(0, 2), d.slice(2, 4), d.slice(4)]; else if (d.length === 4) m = [d, d.slice(0, 2), d.slice(2, 4), '']; }
-    if (!m) return { valor: String(s || '').trim(), ok: false, iso: '' };
-    const dia = +m[1], mes = +m[2];
-    let ano = m[3] ? +m[3] : anoPadrao;
-    if (ano < 100) ano += 2000;
-    const dt = new Date(ano, mes - 1, dia);
-    const ok = mes >= 1 && mes <= 12 && dt.getDate() === dia && ano >= 2000 && ano <= 2100;
+    const orig = String(s || '').trim();
+    const t = orig.replace(/[OoQD]/g, '0').replace(/[Il|i]/g, '1');
     const p = n => String(n).padStart(2, '0');
-    return ok ? { valor: `${p(dia)}/${p(mes)}/${ano}`, ok: true, iso: `${ano}-${p(mes)}-${p(dia)}` } : { valor: String(s || '').trim(), ok: false, iso: '' };
+    const montar = (d, m, a) => {
+      const dia = +d, mes = +m;
+      let ano = a ? +a : anoPadrao;
+      if (a && a.length === 3 && a.startsWith('20')) ano = anoPadrao; // ano cortado ("202")
+      if (ano < 100) ano += 2000;
+      const dt = new Date(ano, mes - 1, dia);
+      return mes >= 1 && mes <= 12 && dia >= 1 && dt.getDate() === dia && ano >= 2000 && ano <= 2100
+        ? { valor: `${p(dia)}/${p(mes)}/${ano}`, ok: true, iso: `${ano}-${p(mes)}-${p(dia)}` } : null;
+    };
+    // candidatos: com separadores; só dígitos (a barra "sumiu" na leitura: 1111/2026, 18022026)
+    const cands = [];
+    const m = t.match(/(\d{1,2})\s*[/.\-\\]\s*(\d{1,2})(?:\s*[/.\-\\]\s*(\d{2,4}))?/);
+    if (m) cands.push([m[1], m[2], m[3] || '']);
+    const d = t.replace(/\D/g, '');
+    if (d.length === 8 || d.length === 6) cands.push([d.slice(0, 2), d.slice(2, 4), d.slice(4)]);
+    if (d.length === 4) cands.push([d.slice(0, 2), d.slice(2, 4), '']);
+    if (d.length === 7) cands.push([d.slice(0, 1), d.slice(1, 3), d.slice(3)], [d.slice(0, 2), d.slice(2, 3), d.slice(3)]);
+    for (const c of cands) { const r = montar(...c); if (r) return r; }
+    // um dígito parecido trocado no dia ou no mês (ex.: 25/68/26 -> 25/08/26): só se houver UMA saída válida
+    // (só quando o dia ou o mês é impossível; "31/02" continua inválida para a pessoa conferir)
+    if (cands.length && (+cands[0][1] > 12 || +cands[0][1] < 1 || +cands[0][0] > 31 || +cands[0][0] < 1)) {
+      const [dd, mm, aa] = cands[0], achados = new Map();
+      [[dd, v => [v, mm]], [mm, v => [dd, v]]].forEach(([campo, junta]) => {
+        for (let k = 0; k < campo.length; k++) for (const alt of DIGITO_PARECIDO[campo[k]] || '') {
+          const r = montar(...junta(campo.slice(0, k) + alt + campo.slice(k + 1)), aa);
+          if (r) achados.set(r.iso, r);
+        }
+      });
+      if (achados.size === 1) return { ...[...achados.values()][0], corrigida: true };
+    }
+    return { valor: orig, ok: false, iso: '' };
   }
   function limparTexto(s) {
     return String(s || '').replace(/[|_[\]{}<>~^`"“”]/g, ' ').replace(/\s+/g, ' ').replace(/^[\s.,;:'\-]+|[\s.,;:'\-]+$/g, '').trim();
@@ -390,19 +421,44 @@ const RecebOCR = (() => {
   // todas as partes parecem SELB completos (3+ caracteres com dígito): "A123 A124" -> 2, "B7 7" -> 1.
   const chaveSelb = t => normalizar(t).replace(/ /g, '');
   function separarSelbs(t) {
-    const partes = String(t || '').replace(/\s+e\s+/gi, ',').split(/[,;+|\n]+/)
+    const partes = String(t || '').replace(/\s+e\s+/gi, ',').replace(/\.\s+/g, ',').split(/[,;+|\n]+/)
       .map(x => x.trim().replace(/\s+/g, ' ')).filter(Boolean)
       .flatMap(p => { const q = p.split(' '); return q.length > 1 && q.every(x => x.length >= 3 && /\d/.test(x)) ? q : [p]; });
     const vistos = new Set();
     return partes.filter(p => { const k = chaveSelb(p); if (!k || vistos.has(k)) return false; vistos.add(k); return true; });
   }
   const juntarSelbs = lista => lista.join(', ');
+  // formato mais comum dos SELBs já registrados (ex.: 1 letra + 4 dígitos), para corrigir
+  // letra lida no lugar de número e vice-versa. Só vale com 5+ exemplos e 60%+ no mesmo formato.
+  function formatoSelb(lista) {
+    const cont = new Map(); let n = 0;
+    for (const v of lista || []) {
+      const m = chaveSelb(v).match(/^([A-Z]+)(\d+)$/);
+      n++;
+      if (m) { const k = m[1].length + ':' + m[2].length; cont.set(k, (cont.get(k) || 0) + 1); }
+    }
+    let melhor = null;
+    for (const [k, c] of cont) if (!melhor || c > melhor.c) melhor = { k, c };
+    if (!melhor || melhor.c < 5 || melhor.c / n < 0.6) return null;
+    const [letras, digitos] = melhor.k.split(':').map(Number);
+    return { letras, digitos };
+  }
+  const LETRA_P_DIGITO = { O: '0', Q: '0', D: '0', U: '0', I: '1', L: '1', J: '1', T: '7', Z: '2', S: '5', B: '8', G: '6', A: '4', E: '3', Y: '4' };
+  const DIGITO_P_LETRA = { 0: 'O', 1: 'I', 2: 'Z', 4: 'A', 5: 'S', 6: 'G', 8: 'B', 7: 'T', 3: 'E' };
+  function ajustarAoFormato(selb, fmt) {
+    const k = chaveSelb(selb);
+    if (!fmt || k.length !== fmt.letras + fmt.digitos || new RegExp(`^[A-Z]{${fmt.letras}}\\d{${fmt.digitos}}$`).test(k)) return selb;
+    const ini = [...k.slice(0, fmt.letras)].map(c => /\d/.test(c) ? DIGITO_P_LETRA[c] || c : c).join('');
+    const fim = [...k.slice(fmt.letras)].map(c => /[A-Z]/.test(c) ? LETRA_P_DIGITO[c] || c : c).join('');
+    const r = ini + fim;
+    return new RegExp(`^[A-Z]{${fmt.letras}}\\d{${fmt.digitos}}$`).test(r) ? r : selb;
+  }
   const temSelb = (campo, selb) => { const k = chaveSelb(selb); return !!k && separarSelbs(campo).some(x => chaveSelb(x) === k); };
 
   return {
-    normalizar, similaridade, sugerir, chaveSelb, separarSelbs, juntarSelbs, temSelb,
+    normalizar, similaridade, sugerir, chaveSelb, separarSelbs, juntarSelbs, temSelb, formatoSelb, ajustarAoFormato,
     cinza, reduzir, binarizar, mascarasLinhas, detectarCantos, homografia, aplicar, cantosGirados, retificar,
-    analisarGrade, celula, tinta, temConteudo, scoreLarguras, cpfValido, limparCpf, limparData, limparTexto, soDigitos,
+    analisarGrade, celula, mascaraTinta, tinta, temConteudo, scoreLarguras, cpfValido, limparCpf, limparData, limparTexto, soDigitos,
   };
 })();
 if (typeof module !== 'undefined') module.exports = RecebOCR;

@@ -37,6 +37,7 @@ async function renderReceb(arg) {
   RB.dirty = false; RB.cur = null;
   if (arg === 'importar') return renderImportar();
   if (arg === 'selbs') return renderSelbs();
+  if (arg === 'treino') return renderTreino();
   if (arg && arg.split('~')[0] === 'locais') return renderLocais(arg.split('~')[1] || '');
   if (arg) { const [fid, n] = arg.split('~'); return abrirFolha(fid, +n || 0); }
   RB.imp = null;
@@ -161,6 +162,10 @@ async function carregarVocab() {
   // locais cadastrados vêm primeiro (nome oficial), depois os já usados nas folhas
   const cad = await carregarLocais().catch(() => []);
   RB.vocab = { local: [...new Set([...cad.map(L => L.nome), ...conta('local')])], selb: conta('selb') };
+  RB.formatoSelb = RecebOCR.formatoSelb(RB.vocab.selb); // ex.: 1 letra + 4 dígitos
+  // modo treinamento: regras aprendidas com as correções ("leitura X foi corrigida para Y")
+  const tr = await api('api/treino').then(r => r.ok ? r.json() : null).catch(() => null);
+  RB.treino = tr; RB.memoria = tr && tr.ativo ? tr.memoria : null;
 }
 
 // ---------------------------------------------------------------- local pelo histórico do SELB
@@ -310,7 +315,10 @@ function renderAjuste() {
         <button class="btn ghost" id="rbGirar" title="Gira a orientação da tabela em 90°">Girar 90°</button>
         <button class="btn ghost" id="rbRedet">Detectar de novo</button>
         <button class="btn ghost" id="rbManual" title="Sem tabela/OCR: digita as linhas olhando a imagem">Digitar manualmente</button>
+        <label class="rb-motor" title="Onde o texto é lido">Leitura <select id="rbMotor">
+          <option value="servidor">${MOTOR_TXT.servidor}</option><option value="navegador">${MOTOR_TXT.navegador}</option></select></label>
         <button class="btn" id="rbLer">Ler folha (OCR)</button></div></div>
+    <p class="muted rb-motor-st" id="rbMotorSt"></p>
     ${A.auto ? '' : '<p class="note">Não encontrei a tabela automaticamente. Arraste os 4 cantos até os cantos da tabela ou use <b>Digitar manualmente</b> para lançar as linhas olhando a imagem.</p>'}
     <p class="muted">Confira se os 4 cantos estão nos cantos externos da tabela (arraste para ajustar). À direita, a folha corrigida:
       <span style="color:var(--ok)">verde</span> = célula vazia, <span style="color:var(--bad)">vermelho</span> = célula com escrita (vai para o OCR).
@@ -382,6 +390,23 @@ function renderAjuste() {
   });
   if ($('#rbPular')) $('#rbPular').addEventListener('click', proximaFolha);
   $('#rbLer').addEventListener('click', () => lerFolha());
+  // motor de leitura: servidor (TrOCR) quando estiver pronto; senão o navegador
+  const selM = $('#rbMotor');
+  A.motorEscolhido = A.motorEscolhido || motorPreferido();
+  selM.value = A.motorEscolhido;
+  selM.addEventListener('change', () => { A.motorEscolhido = selM.value; try { localStorage.setItem('diagOcrMotor', selM.value); } catch { /* só agora */ } mostrarEstadoMotor(); });
+  const mostrarEstadoMotor = async () => {
+    const st = await estadoOcrServidor();
+    if (!$('#rbMotorSt')) return;
+    const pronto = st.estado === 'pronto';
+    selM.querySelector('option[value="servidor"]').textContent = MOTOR_TXT.servidor + (pronto ? '' : ` — ${ESTADO_OCR_TXT[st.estado] || st.estado}`);
+    if (st.estado === 'desativado') { selM.querySelector('option[value="servidor"]').disabled = true; if (selM.value === 'servidor') { selM.value = 'navegador'; A.motorEscolhido = 'navegador'; } }
+    $('#rbMotorSt').textContent = A.motorEscolhido === 'servidor' && !pronto
+      ? `OCR do servidor ${ESTADO_OCR_TXT[st.estado] || st.estado}${st.detalhe ? ' (' + st.detalhe + ')' : ''}. Enquanto isso, a leitura usa o navegador.` : '';
+    if (A.motorEscolhido === 'servidor' && !pronto && st.estado !== 'desativado') A.motorAguardando = setTimeout(mostrarEstadoMotor, 5000);
+  };
+  clearTimeout(A.motorAguardando);
+  mostrarEstadoMotor();
   $('#rbManual').addEventListener('click', montarManual);
   desenhar(); previa();
 }
@@ -419,11 +444,148 @@ function recorte(R, q, alturaAlvo, contraste = true) {
   return c;
 }
 
+// ---------------------------------------------------------------- leitura de uma célula
+// Versões da imagem da célula para o OCR:
+//   cinza  : tons de cinza com contraste esticado (preserva traço fraco)
+//   limpa  : só a tinta, preta sobre branco (tira sombra, granulado e sobras da grade)
+//   grossa : "limpa" com o traço engrossado 1 px (caneta fina / letra corrida)
+function imagemCelula(R, G, q, tipo, alturaAlvo) {
+  if (tipo === 'cinza') return recorte(R, q, alturaAlvo);
+  const m = RecebOCR.mascaraTinta(G, R, q);
+  let t = m;
+  if (tipo === 'grossa') {
+    t = new Uint8Array(m.length);
+    for (let y = 0; y < q.h; y++) for (let x = 0; x < q.w; x++) {
+      if (!m[y * q.w + x]) continue;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const yy = y + dy, xx = x + dx;
+        if (yy >= 0 && yy < q.h && xx >= 0 && xx < q.w) t[yy * q.w + xx] = 1;
+      }
+    }
+  }
+  const k = Math.max(1, Math.min(4, alturaAlvo / q.h)), pad = 14;
+  const src = document.createElement('canvas'); src.width = q.w; src.height = q.h;
+  const sx = src.getContext('2d'), id = sx.createImageData(q.w, q.h);
+  for (let i = 0; i < t.length; i++) { const v = t[i] ? 0 : 255; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+  sx.putImageData(id, 0, 0);
+  const c = document.createElement('canvas');
+  c.width = Math.round(q.w * k) + pad * 2; c.height = Math.round(q.h * k) + pad * 2;
+  const x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+  x.imageSmoothingQuality = 'high';
+  x.drawImage(src, pad, pad, c.width - pad * 2, c.height - pad * 2);
+  return c;
+}
+
+// pontua uma leitura: confiança do OCR + bônus quando o texto "faz sentido" para a coluna
+function pontuarLeitura(k, texto, conf) {
+  const t = (texto || '').trim();
+  if (!t) return -1;
+  let p = conf;
+  if (k === 'data') p += RecebOCR.limparData(t).ok ? 40 : -20;
+  if (k === 'selb') {
+    const itens = selbsDe(t.toUpperCase()).map(x => RecebOCR.ajustarAoFormato(x, RB.formatoSelb));
+    if (itens.length && itens.every(x => /\d/.test(x) && x.replace(/[^A-Z0-9]/g, '').length >= 2)) p += 15;
+    const voc = (RB.vocab && RB.vocab.selb) || [];
+    if (itens.some(x => voc.some(v => RecebOCR.chaveSelb(v) === RecebOCR.chaveSelb(x)))) p += 25;
+  }
+  if (k === 'local') {
+    const voc = (RB.vocab && RB.vocab.local) || [];
+    const sg = voc.length && RecebOCR.sugerir(RecebOCR.limparTexto(t), voc, 0.7);
+    if (sg) p += 25 * sg.sim;
+    if (/[A-Za-zÀ-ú]{3}/.test(t)) p += 5;
+  }
+  return p;
+}
+
+// lê uma célula: modo "base" = uma imagem; "multi" = várias versões e fica com a melhor leitura
+// (para cedo quando a primeira já é boa). Retorna { texto, conf, versao }.
+async function lerCelula(w, R, G, tk, k, modo = 'multi') {
+  const cx = tk.t.caixa, f = 6;
+  const q = { x: Math.max(tk.q.x, cx.x - f), y: Math.max(tk.q.y, cx.y - f) };
+  q.w = Math.min(tk.q.x + tk.q.w, cx.x + cx.w + f) - q.x; q.h = Math.min(tk.q.y + tk.q.h, cx.y + cx.h + f) - q.y;
+  const versoes = modo === 'base' ? [['cinza', 64]] : [['cinza', 64], ['limpa', 56], ['grossa', 56]];
+  let melhor = { texto: '', conf: 0, versao: '', p: -Infinity };
+  for (const [tipo, alvo] of versoes) {
+    let texto = '', conf = 0;
+    try {
+      const { data } = await w.recognize(imagemCelula(R, G, q, tipo, alvo));
+      texto = (data.text || '').trim(); conf = Math.round(data.confidence || 0);
+    } catch { continue; }
+    const p = pontuarLeitura(k, texto, conf);
+    if (p > melhor.p) melhor = { texto, conf, versao: tipo, p };
+    // primeira leitura já confiável e coerente: não precisa das outras versões
+    if (modo !== 'base' && conf >= 88 && p >= conf) break;
+  }
+  return { texto: melhor.texto, conf: melhor.conf, versao: melhor.versao };
+}
+
+// SELB que já tem cara de código completo (pelo formato aprendido; sem ele, letras + 2+ dígitos)
+const selbBemFormado = x => RB.formatoSelb
+  ? new RegExp(`^[A-Z]{${RB.formatoSelb.letras}}\\d{${RB.formatoSelb.digitos}}$`).test(RecebOCR.chaveSelb(x))
+  : /^[A-Z]{0,4}\d{2,}$/.test(RecebOCR.chaveSelb(x));
+
+// ---------------------------------------------------------------- motor de leitura
+// "servidor": TrOCR (manuscrito) no serviço diag-ocr do container; "navegador": Tesseract.
+// Preferência guardada no navegador; sem servidor pronto, usa o navegador.
+const MOTOR_TXT = { servidor: 'Servidor (TrOCR, manuscrito)', navegador: 'Navegador (Tesseract)' };
+function motorPreferido() { try { return localStorage.getItem('diagOcrMotor') || 'servidor'; } catch { return 'servidor'; } }
+async function estadoOcrServidor() {
+  const r = await api('api/ocr/saude').catch(() => null);
+  return r && r.ok ? r.json() : { estado: 'indisponivel' };
+}
+const ESTADO_OCR_TXT = {
+  pronto: 'pronto', baixando: 'baixando o modelo (só na 1ª vez)', carregando: 'carregando o modelo', iniciando: 'iniciando',
+  erro: 'com erro', indisponivel: 'indisponível', desativado: 'não instalado neste servidor',
+};
+
+// recorte pequeno da célula (para o OCR do servidor e para o treinamento)
+function recorteCelula(R, tk, altura) {
+  const cx = tk.t.caixa, f = 6;
+  const q = { x: Math.max(tk.q.x, cx.x - f), y: Math.max(tk.q.y, cx.y - f) };
+  q.w = Math.min(tk.q.x + tk.q.w, cx.x + cx.w + f) - q.x; q.h = Math.min(tk.q.y + tk.q.h, cx.y + cx.h + f) - q.y;
+  return recorte(R, q, altura);
+}
+
+async function lerNoServidor(R, tarefas, progresso, cancelado) {
+  const lidos = {}, LOTE = 16;
+  for (let i = 0; i < tarefas.length; i += LOTE) {
+    if (cancelado()) return null;
+    const lote = tarefas.slice(i, i + LOTE);
+    const r = await api('api/ocr', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imagens: lote.map(tk => recorteCelula(R, tk, 64).toDataURL('image/png')) }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !Array.isArray(j.textos)) throw new Error(j.erro || `HTTP ${r.status}`);
+    lote.forEach((tk, k) => { (lidos[tk.r] = lidos[tk.r] || {})[COLS[tk.c].k] = { texto: j.textos[k].texto || '', conf: j.textos[k].conf || 0 }; });
+    progresso(Math.min(tarefas.length, i + LOTE));
+  }
+  return lidos;
+}
+
+async function lerNoNavegador(R, G, tarefas, progresso, cancelado) {
+  const w = await ocrWorker(m => progresso(0, m));
+  // com locais/SELBs já registrados, testa várias versões da imagem e escolhe a leitura que bate com eles
+  // (no teste de precisão em test/ocr-bench.js isso reduziu os erros; sem lista não fez diferença)
+  const modo = RB.vocab && RB.vocab.local.length + RB.vocab.selb.length >= 5 ? 'multi' : 'base';
+  const lidos = {};
+  let colAtual = -1, feitas = 0;
+  for (const tk of tarefas) {
+    if (cancelado()) return null;
+    if (tk.c !== colAtual) {
+      colAtual = tk.c;
+      await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: COLS[tk.c].wl, preserve_interword_spaces: '1' });
+    }
+    const { texto, conf } = await lerCelula(w, R, G, tk, COLS[tk.c].k, modo);
+    (lidos[tk.r] = lidos[tk.r] || {})[COLS[tk.c].k] = { texto, conf };
+    progresso(++feitas);
+  }
+  return lidos;
+}
+
 async function lerFolha() {
   const A = RB.imp.atual, R = A.R, G = A.G, el = $('#mod-receb');
   const nCol = Math.min(COLS.length, G.cols.length - 1), r0 = FOLHA_MODELO.cabecalho ? 1 : 0;
-  // células a ler, agrupadas por coluna (troca os parâmetros do OCR uma vez por coluna)
-  // linha com escrita em qualquer coluna (inclusive só nome/assinatura) entra na conferência
+  // células a ler; linha com escrita em qualquer coluna (inclusive só nome/assinatura) entra na conferência
   const tarefas = [], comEscrita = new Set();
   for (let c = 0; c < nCol; c++) for (let r = r0; r + 1 < G.rows.length; r++) {
     const q = RecebOCR.celula(G, r, c), t = RecebOCR.tinta(G, R, q);
@@ -431,45 +593,44 @@ async function lerFolha() {
     comEscrita.add(r);
     if (COLS[c].ler) tarefas.push({ r, c, q, t });
   }
-  RB.imp.atual.comEscrita = comEscrita;
+  A.comEscrita = comEscrita;
+  // recortes guardados para o modo treinamento (só Local/SELB/Data)
+  A.recortes = {};
+  for (const tk of tarefas) (A.recortes[tk.r] = A.recortes[tk.r] || {})[COLS[tk.c].k] = recorteCelula(R, tk, 40).toDataURL('image/png');
   el.innerHTML = `<div class="panel"><h2>Lendo a folha…</h2>
-    <p id="rbSt" class="muted">Carregando o OCR (na primeira vez pode levar alguns segundos)…</p>
+    <p id="rbSt" class="muted">Preparando…</p>
     <div class="vol-bar" style="max-width:520px"><div id="rbBar" style="width:0%"></div></div>
     <p><button class="btn ghost small" id="rbCancel">Cancelar</button></p></div>`;
-  let cancelado = false;
-  $('#rbCancel').addEventListener('click', () => { cancelado = true; renderAjuste(); });
-  let w;
-  try {
-    w = await ocrWorker(m => { if (m.status && $('#rbSt') && !tarefas.feitas) $('#rbSt').textContent = `Carregando o OCR: ${m.status} ${m.progress ? Math.round(m.progress * 100) + '%' : ''}`; });
-  } catch (e) {
-    el.innerHTML = `<div class="panel"><p class="err">Não foi possível iniciar o OCR: ${esc(e.message)}</p><p>Você ainda pode digitar os dados manualmente.</p><button class="btn" id="rbMan">Preencher manualmente</button></div>`;
-    $('#rbMan').addEventListener('click', () => montarRevisao({}));
-    if (!tarefas.length) return;
-    return;
-  }
-  const lidos = {};
-  let colAtual = -1;
-  tarefas.feitas = 0;
-  for (const tk of tarefas) {
-    if (cancelado) return;
-    if (tk.c !== colAtual) {
-      colAtual = tk.c;
-      await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: COLS[tk.c].wl, preserve_interword_spaces: '1' });
+  let cancelou = false;
+  const cancelado = () => cancelou;
+  $('#rbCancel').addEventListener('click', () => { cancelou = true; renderAjuste(); });
+  const progresso = (n, m) => {
+    if (!$('#rbBar')) return;
+    if (m && m.status && !n) { $('#rbSt').textContent = `Carregando o OCR: ${m.status} ${m.progress ? Math.round(m.progress * 100) + '%' : ''}`; return; }
+    $('#rbBar').style.width = Math.round(n / Math.max(1, tarefas.length) * 100) + '%';
+    $('#rbSt').textContent = `${MOTOR_TXT[A.motor]}: célula ${n} de ${tarefas.length}…`;
+  };
+  if (!RB.vocab) await carregarVocab().catch(() => {});
+  let lidos = null;
+  A.motor = A.motorEscolhido || 'navegador';
+  if (A.motor === 'servidor' && (await estadoOcrServidor()).estado !== 'pronto') { A.motor = 'navegador'; A.avisoMotor = 'O OCR do servidor ainda não está pronto; a folha foi lida no navegador.'; }
+  if (A.motor === 'servidor') {
+    try { lidos = await lerNoServidor(R, tarefas, progresso, cancelado); }
+    catch (e) {
+      if (cancelou) return;
+      A.avisoMotor = `O OCR do servidor falhou (${e.message}); a folha foi lida no navegador.`;
+      A.motor = 'navegador';
     }
-    // recorta só a área escrita (com folga) para tirar sobras das linhas da grade
-    const cx = tk.t.caixa, f = 6;
-    const q = { x: Math.max(tk.q.x, cx.x - f), y: Math.max(tk.q.y, cx.y - f) };
-    q.w = Math.min(tk.q.x + tk.q.w, cx.x + cx.w + f) - q.x; q.h = Math.min(tk.q.y + tk.q.h, cx.y + cx.h + f) - q.y;
-    let texto = '', conf = 0;
-    try {
-      const { data } = await w.recognize(recorte(R, q, 64));
-      texto = (data.text || '').trim(); conf = Math.round(data.confidence || 0);
-    } catch { /* célula fica vazia para digitar */ }
-    (lidos[tk.r] = lidos[tk.r] || {})[COLS[tk.c].k] = { texto, conf };
-    tarefas.feitas++;
-    if ($('#rbBar')) { $('#rbBar').style.width = Math.round(tarefas.feitas / tarefas.length * 100) + '%'; $('#rbSt').textContent = `Lendo célula ${tarefas.feitas} de ${tarefas.length}…`; }
   }
-  if (!cancelado) montarRevisao(lidos);
+  if (!lidos && !cancelou) {
+    try { lidos = await lerNoNavegador(R, G, tarefas, progresso, cancelado); }
+    catch (e) {
+      el.innerHTML = `<div class="panel"><p class="err">Não foi possível iniciar o OCR: ${esc(e.message)}</p><p>Você ainda pode digitar os dados manualmente.</p><button class="btn" id="rbMan">Preencher manualmente</button></div>`;
+      $('#rbMan').addEventListener('click', () => montarRevisao({}));
+      return;
+    }
+  }
+  if (!cancelou && lidos) montarRevisao(lidos);
 }
 
 function montarRevisao(lidos) {
@@ -479,29 +640,45 @@ function montarRevisao(lidos) {
   for (let r = r0; r + 1 < G.rows.length; r++) {
     const L = lidos[r] || {};
     if (!lidos[r] && !(A.comEscrita && A.comEscrita.has(r))) continue;
-    const l = { n: r - r0 + 1, revisado: false, escrita: true, conf: {}, dataIso: '' };
+    const l = { n: r - r0 + 1, revisado: false, escrita: true, conf: {}, dataIso: '', lido: {}, motor: A.motor || '' };
     l.dica = {};
     for (const c of CAMPOS) {
       const v = L[c.k];
       l[c.k] = '';
       if (!v) continue;
       l.conf[c.k] = v.conf;
+      l.lido[c.k] = v.texto; // leitura original: vai para o modo treinamento quando a linha for conferida
+      // modo treinamento: esta mesma leitura já foi corrigida antes (SELB bem formado nunca é trocado)
+      const regra = RB.memoria && RB.memoria[c.k] && RB.memoria[c.k][c.k === 'selb' ? RecebOCR.chaveSelb(v.texto) : RecebOCR.normalizar(v.texto)];
+      if (regra && !(c.k === 'selb' && selbBemFormado(v.texto))) {
+        if (c.k === 'data') { const d = RecebOCR.limparData(regra.final, anoPadrao); l.data = d.valor; l.dataIso = d.iso; }
+        else l[c.k] = c.k === 'selb' ? normSelbs(regra.final) : regra.final;
+        l.dica[c.k] = { tipo: 'memoria', texto: v.texto.trim(), n: regra.n };
+        continue;
+      }
       if (c.k === 'data') {
         const d = RecebOCR.limparData(v.texto, anoPadrao);
         // leitura ruim e inválida: melhor vazio (com a leitura como dica) do que lixo no campo
         if (!d.ok && v.conf < 50) { l.dica.data = { tipo: 'incerto', texto: v.texto.trim() }; continue; }
         l.data = d.valor; l.dataIso = d.iso;
+        if (d.corrigida) l.dica.data = { tipo: 'corrigida', texto: v.texto.trim() }; // dígito parecido trocado: conferir
         continue;
       }
       const t = RecebOCR.limparTexto(v.texto).toUpperCase();
       if (c.k === 'selb') {
         // vários SELBs: corrige cada um pela lista dos já registrados
-        const itens = selbsDe(t), voc = (RB.vocab && RB.vocab.selb) || [];
-        const corr = itens.map(x => { const sg = RecebOCR.sugerir(x, voc, 0.8); return sg ? sg.valor : x; });
-        const conhecidos = itens.filter((x, j) => RecebOCR.sugerir(x, voc, 0.8)).length;
+        // formato aprendido dos SELBs já registrados corrige letra/dígito trocados ("A2A17" -> "A2417")
+        const itens = selbsDe(t).map(x => RecebOCR.ajustarAoFormato(x, RB.formatoSelb)), voc = (RB.vocab && RB.vocab.selb) || [];
+        // SELB costuma ser sequencial (A1234, A1235...): um código bem formado NUNCA é trocado pelo "mais parecido";
+        // a lista só ajuda quando a leitura está estragada (sobrou letra/sinal fora do formato)
+        const bemFormado = selbBemFormado;
+        const corrigir = x => { if (bemFormado(x)) return x; const sg = RecebOCR.sugerir(x, voc, 0.8); return sg ? sg.valor : x; };
+        const corr = itens.map(corrigir);
+        const conhecidos = itens.filter(x => bemFormado(x) || RecebOCR.sugerir(x, voc, 0.8)).length;
         if (!itens.length || (v.conf < 40 && !conhecidos)) { if (t) l.dica.selb = { tipo: 'incerto', texto: t }; continue; }
         l.selb = RecebOCR.juntarSelbs(corr);
-        if (RecebOCR.normalizar(l.selb) !== RecebOCR.normalizar(RecebOCR.juntarSelbs(itens))) l.dica.selb = { tipo: 'lista', texto: RecebOCR.juntarSelbs(itens) };
+        const lidoSelb = RecebOCR.juntarSelbs(selbsDe(t));
+        if (RecebOCR.chaveSelb(l.selb) !== RecebOCR.chaveSelb(lidoSelb)) l.dica.selb = { tipo: 'lista', texto: lidoSelb };
         continue;
       }
       // compara com o que já foi cadastrado (cursiva costuma sair "parecida")
@@ -511,6 +688,7 @@ function montarRevisao(lidos) {
       else if (v.conf < 40) l.dica[c.k] = { tipo: 'incerto', texto: t };
       else l[c.k] = t;
     }
+    l.confLida = { ...l.conf };
     linhas.push(l);
   }
   // local pelo histórico do SELB (outras folhas e linhas anteriores desta)
@@ -572,7 +750,8 @@ function renderFolhaEditor(F, imgs, opt = {}) {
         <label class="full">Observações <textarea id="rbObs" rows="2" maxlength="2000">${esc(F.obs)}</textarea></label>
       </div>
       ${opt.manual ? `<p class="note info">Lançamento manual: digite ${CAMPOS.map(c => c.rotulo).join(', ')} de cada entrega olhando a imagem abaixo. Linhas sem nada preenchido são descartadas ao salvar.</p>` : ''}
-      ${opt.nova && !opt.manual ? `<p class="note info">${F.linhas.length} linha(s) com escrita de ${opt.nLinhas}. O OCR leu ${CAMPOS.map(c => c.rotulo).join(', ')}: confira com a foto da linha e corrija o que for preciso.
+      ${opt.nova && !opt.manual && RB.imp && RB.imp.atual && RB.imp.atual.avisoMotor ? `<p class="note">${esc(RB.imp.atual.avisoMotor)}</p>` : ''}
+      ${opt.nova && !opt.manual ? `<p class="note info">Lido por: <b>${esc(MOTOR_TXT[RB.imp.atual.motor] || '')}</b>${RB.treino && RB.treino.ativo ? ' · modo treinamento ligado: as linhas conferidas ensinam o sistema' : ''}.<br>${F.linhas.length} linha(s) com escrita de ${opt.nLinhas}. O OCR leu ${CAMPOS.map(c => c.rotulo).join(', ')}: confira com a foto da linha e corrija o que for preciso.
         ${esc(NA_IMAGEM)} não são digitados: ficam na foto da folha. Campos em <span class="bad-txt">vermelho</span> têm baixa confiança ou formato inválido.</p>` : ''}
     </div>
     ${opt.imagem ? `<div class="panel"><div class="head-row"><h2>Folha</h2><small class="muted">clique na imagem para ampliar</small></div>
@@ -596,7 +775,11 @@ function renderFolhaEditor(F, imgs, opt = {}) {
         const ruim = (c.k === 'data' && v && !dataOk(v)) || (conf != null && conf < 60 && !l.revisado) || (dica && dica.tipo !== 'historico' && dica.tipo !== 'histSug' && !l.revisado);
         const lista = c.k === 'local' ? 'rbDlLocal' : c.k === 'selb' ? 'rbDlSelb' : '';
         const quando = dica && dataCurta(dica.quando) ? `, última em ${dataCurta(dica.quando)}` : '';
-        const txtDica = !dica ? '' : dica.tipo === 'lista'
+        const txtDica = !dica ? '' : dica.tipo === 'memoria'
+          ? `corrigido pelo treinamento: “${esc(dica.texto)}” já foi corrigido ${dica.n} vez${dica.n > 1 ? 'es' : ''} <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar o lido</button>`
+          : dica.tipo === 'corrigida'
+          ? `OCR leu “${esc(dica.texto)}” (data impossível) → corrigida; confira <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar o lido</button>`
+          : dica.tipo === 'lista'
           ? `OCR leu “${esc(dica.texto)}” → corrigido pela lista <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar “${esc(dica.texto)}”</button>`
           : dica.tipo === 'historico'
           ? `preenchido pelo histórico do SELB ${esc(dica.selb)} (${dica.vezes} entrega${dica.vezes > 1 ? 's' : ''}${quando}) — corrija se mudou${dica.texto ? ` <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar o lido “${esc(dica.texto)}”</button>` : ''}`
@@ -710,6 +893,22 @@ function renderFolhaEditor(F, imgs, opt = {}) {
   desenhar(); listas();
 }
 
+// modo treinamento: cada campo lido pelo OCR em linha CONFERIDA vira exemplo (leitura original x texto final)
+async function enviarExemplos(folhaId, F, recortes) {
+  if (!RB.treino || !RB.treino.ativo) return;
+  const exemplos = [];
+  for (const l of F.linhas) {
+    if (!l.revisado || !l.lido) continue;
+    for (const c of CAMPOS) {
+      if (l.lido[c.k] == null) continue;
+      exemplos.push({ chave: `${folhaId}~${l.n}~${c.k}`, campo: c.k, lido: l.lido[c.k], final: l[c.k] || '', motor: l.motor || '',
+        conf: l.confLida ? l.confLida[c.k] : (l.conf || {})[c.k], img: recortes && recortes[l.n] ? recortes[l.n][c.k] : undefined });
+    }
+  }
+  if (!exemplos.length) return;
+  await api('api/treino/exemplos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ exemplos }) }).catch(() => null);
+}
+
 async function enviarAnexo(id, blob, nome, legenda) {
   const u8 = new Uint8Array(await blob.arrayBuffer());
   const r = await api(`api/recebimentos/${id}/anexos`, { method: 'POST', body: u8, headers: {
@@ -723,6 +922,10 @@ async function salvarNova(F) {
   const r = await api('api/recebimentos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(F) }).catch(() => null);
   if (!r || !r.ok) { const e = r ? (await r.json().catch(() => ({}))).erro : ''; return alert('Não foi possível salvar: ' + (e || 'servidor indisponível.')); }
   const salvo = await r.json();
+  // treinamento: recortes por número da linha na folha
+  const r0 = FOLHA_MODELO.cabecalho ? 1 : 0, recs = {};
+  for (const [row, v] of Object.entries(A.recortes || {})) recs[+row - r0 + 1] = v;
+  await enviarExemplos(salvo.id, F, recs);
   // imagem retificada (usada para mostrar os recortes das linhas) + foto original
   // manual: sem retificada; guarda a imagem da folha (útil para PDF, que o navegador não mostra inline)
   const ret = A.manual ? imagemReduzida(A.canvas, 2400) : recorte(A.R, { x: 0, y: 0, w: A.R.w, h: A.R.h }, 0, false);
@@ -743,6 +946,7 @@ async function salvarExistente(F) {
   if (!r || !r.ok) { const e = r ? (await r.json().catch(() => ({}))).erro : ''; return alert('Não foi possível salvar: ' + (e || 'servidor indisponível.')); }
   const novo = await r.json();
   Object.assign(F, { revisao: novo.revisao, atualizadoEm: novo.atualizadoEm });
+  await enviarExemplos(F.id, F, null); // conferências feitas depois também ensinam (sem imagem nova)
   RB.dirty = false;
   const t = document.querySelector('#mod-receb .ld-bar small.mono'); if (t) t.textContent = `${F.id} · rev. ${F.revisao} · salvo`;
 }

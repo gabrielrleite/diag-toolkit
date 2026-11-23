@@ -1,0 +1,5 @@
+# diag-ocr: só o necessário para rodar o TrOCR exportado em ONNX (sem PyTorch)
+onnxruntime==1.32.0
+numpy==2.5.5
+pillow==13.0.0
+tokenizers==0.23.3

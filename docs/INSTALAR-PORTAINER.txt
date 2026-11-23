@@ -42,6 +42,37 @@ Se o GitHub estiver fora do ar, usa a última versão baixada.
    - Navegador: http://IP-DO-SERVIDOR  (pede o READ_TOKEN).
 5. Libere a porta no firewall (PASSO 4).
 
+OCR DE LETRA À MÃO NO SERVIDOR (serviço "ocr" / diag-ocr):
+  A stack também sobe o container diag-ocr, que lê as folhas de recebimento
+  com o TrOCR (modelo de manuscrito da Microsoft, rodando em CPU).
+  - 1ª execução: instala as bibliotecas (~230 MB, do PyPI) e baixa o modelo
+    do Hugging Face (~350 MB). Pode levar 5 a 20 minutos; depois fica nos
+    volumes diag-viewer_ocr-codigo e diag-viewer_modelos.
+    O servidor precisa acessar pypi.org, files.pythonhosted.org e
+    huggingface.co (e os endereços de download dele, *.hf.co).
+  - Memória: ~1 GB de RAM. Cada folha leva alguns segundos.
+  - Ver o estado: Recebimentos > Treinamento > "OCR do servidor" (ou os logs
+    do container diag-ocr: "pronto: Xenova/trocr-base-handwritten q8").
+  - Enquanto não estiver pronto (ou se cair), a leitura usa o navegador
+    (Tesseract) automaticamente; a tela de importação avisa.
+  - Variáveis opcionais da stack:
+      OCR_MODELO   = Xenova/trocr-base-handwritten   (padrão)
+                     Xenova/trocr-small-handwritten  (mais leve e rápido,
+                                                      menos preciso)
+      OCR_PRECISAO = q8 (padrão, quantizado) ou fp32 (~4x maior e mais
+                     lento; um pouco mais preciso)
+  - Servidor fraco: apague o bloco "ocr:" da stack (Editor > Update the
+    stack). A Central diag continua funcionando, lendo no navegador.
+
+MODO TREINAMENTO (Recebimentos > Treinamento):
+  Ligado por padrão. Cada linha CONFERIDA guarda o que o OCR leu em Local,
+  SELB e Data e o texto final (com o recorte dessas células; CPF, nome e
+  assinatura nunca). Leituras corrigidas da mesma forma na maioria das
+  vezes viram "correções aprendidas" e passam a ser aplicadas sozinhas
+  (com aviso). Regras erradas: "Esquecer". "Exportar exemplos" gera um
+  .zip (imagens + rotulos.tsv) para treinar um modelo no futuro.
+  Os dados ficam no volume diag-viewer_coletas, pasta treino/.
+
 ATUALIZAR (método A):
   Containers > diag-viewer > Restart. Ele baixa a versão atual da main.
   (Só quando o próprio portainer-stack.yml mudar: Stacks > diag-viewer >
@@ -212,6 +243,7 @@ Volume diag-viewer_coletas (/data no container):
   modelos/            modelos de laudo (os 5 padrão são criados na 1ª execução)
   laudos/*.assinado.pdf      PDF assinado digitalmente (versão oficial)
   laudos/*.via-assinada.*    digitalização da via assinada à mão
+  treino/             modo treinamento: exemplos.json, config.json, img/
   recebimentos/       folhas de recebimento (OCR), revisões (.bak), anexos
                       (foto/PDF original e folha retificada) e locais.json
   audit.log           envios, recusas, downloads, laudos criados/alterados,
