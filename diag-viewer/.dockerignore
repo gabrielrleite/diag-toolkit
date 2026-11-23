@@ -1,3 +1,7 @@
 data
 .env
 *.zip
+!web/agente/agente-diag.zip
+web/coleta/sensores/
+node_modules
+test
