@@ -68,7 +68,8 @@ MONITORAMENTO DAS IMPRESSORAS (ping):
   Cada SELB com IP no cadastro é verificado a cada 5 minutos (variável
   opcional MONITOR_MIN na stack). Impressora fora do ar aparece na tela
   inicial e com um contador vermelho no menu Recebimentos.
-  - Usa ping (pacote de 16 bytes); se não responder, tenta de novo e
+  - Usa ping com o menor pacote possível (0 bytes de dados = 28 bytes de
+    pacote IP; na rede cabeada vira o quadro mínimo de 64 bytes); se não responder, tenta de novo e
     testa as portas de impressora 9100, 631 e 515.
   - O servidor precisa alcançar as impressoras pela rede (mesma rede ou
     rota liberada no firewall para ICMP e/ou porta 9100).

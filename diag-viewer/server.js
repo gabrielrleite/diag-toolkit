@@ -695,7 +695,8 @@ async function selbsRoute(req, res, url, chave) {
 }
 
 // ------------------------------------------------------------------ monitoramento das impressoras (ping)
-// A cada MONITOR_MIN minutos: 1 ping pequeno (16 bytes) por impressora com IP cadastrado. Se falhar, confirma
+// A cada MONITOR_MIN minutos: 1 ping com o MENOR pacote possível (0 bytes de dados = pacote IP de 28 bytes:
+// 20 de IP + 8 de ICMP) por impressora com IP cadastrado. Se falhar, confirma
 // com um 2º ping e com as portas de impressora (9100/631/515) — impressora que só bloqueia ping não vira
 // alarme falso. Estado em recebimentos/monitor.json; quedas e retornos vão para o audit.log.
 const { execFile } = require('child_process');
@@ -711,7 +712,8 @@ function pingar(ip) {
   return new Promise(resolve => {
     if (!ipOk(ip)) return resolve({ ok: false, erro: 'ip' });
     const t0 = Date.now();
-    execFile('ping', ['-c', '1', '-W', '2', '-s', '16', ip], { timeout: 6000 }, (err, out) => {
+    // -s 0: sem dados (o ping não consegue medir o tempo sozinho; medimos aqui, aproximado)
+    execFile('ping', ['-c', '1', '-W', '2', '-s', '0', ip], { timeout: 6000 }, (err, out) => {
       if (err && err.code === 'ENOENT') return resolve({ ok: false, semPing: true });
       if (err) return resolve({ ok: false });
       const m = String(out).match(/time[=<]\s*([\d.]+)/) || String(out).match(/min\/avg\/max[^=]*=\s*([\d.]+)/);

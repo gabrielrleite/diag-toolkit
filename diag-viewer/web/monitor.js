@@ -25,7 +25,7 @@ function situacaoHtml(ip) {
   const i = MON.porIp.get(ip);
   if (!i || i.online === null) return `<span class="mon-bola" title="Ainda não verificada"></span>`;
   return i.online
-    ? `<span class="mon-bola on" title="Online${i.ms != null ? ` · ${i.ms} ms` : ''} · verificada ${haQuanto(i.verificadoEm)}${i.via && i.via !== 'ping' ? ` (responde na ${i.via}, não ao ping)` : ''}"></span>`
+    ? `<span class="mon-bola on" title="Online${i.ms != null ? ` · ~${i.ms} ms` : ''} · verificada ${haQuanto(i.verificadoEm)}${i.via && i.via !== 'ping' ? ` (responde na ${i.via}, não ao ping)` : ''}"></span>`
     : `<span class="mon-bola off" title="Fora do ar ${haQuanto(i.desde)} · verificada ${haQuanto(i.verificadoEm)}"></span>`;
 }
 
