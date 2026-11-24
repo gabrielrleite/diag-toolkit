@@ -997,14 +997,24 @@ const SNMP_COMUNIDADE = process.env.SNMP_COMUNIDADE || 'public';
 const SNMP_PORTA = +process.env.SNMP_PORTA || 161;
 let supr = { rodada: null, selbs: {} }, suprRodando = null;
 try { supr = { ...supr, ...JSON.parse(fs.readFileSync(SUPR_FILE, 'utf8')) }; } catch { /* primeira vez */ }
-const explicarErroSnmp = e => /sem resposta/.test(e.message)
-  ? 'sem resposta SNMP: verifique se o SNMP está ligado na impressora, a comunidade (padrão "public") e se a porta 161/UDP está liberada'
-  : e.message;
+// quando a leitura falha, uma sonda pequena separa as causas: SNMP desligado, comunidade errada ou rede
+async function diagnosticarSnmp(c, com, e) {
+  const opc = { timeout: 2000, repeticoes: 0, porta: SNMP_PORTA };
+  if (!/sem resposta/.test(e.message)) return e.message;
+  // já respondeu algo na leitura (ou responde à sonda): SNMP ok, problema no meio do caminho
+  const r = e.nenhumaResposta ? null : await snmp.sondar(c.ip, com, opc).catch(() => null);
+  if (!e.nenhumaResposta || r) return `a impressora responde por SNMP${r ? ` (${r.versao})` : ''}, mas a leitura dos suprimentos não terminou (respostas não chegaram). Tente de novo; se repetir, a rede até ela pode estar descartando pacotes UDP grandes (VPN/firewall)`;
+  if (com !== 'public' && await snmp.sondar(c.ip, 'public', opc).catch(() => null)) return `comunidade SNMP "${com}" não aceita; a impressora responde com "public" — corrija no cadastro do SELB`;
+  const est = monitor.estados[c.ip];
+  if (est && est.online === false) return 'a impressora está fora do ar (não responde ao ping)';
+  return `a impressora ${est && est.online ? 'está na rede (responde ao ping), mas ' : ''}não responde por SNMP com a comunidade "${com}". Na página da impressora (pelo IP), confira: SNMPv1/v2c ativado, comunidade de leitura "${com}" e se não há filtro de IP/acesso restrito. Epson: Web Config > Segurança de rede > Protocolo > SNMPv1/v2c`;
+}
 async function lerUma(c) {
+  const com = c.comunidade || SNMP_COMUNIDADE;
   try {
-    const r = await snmp.lerSuprimentos(c.ip, c.comunidade || SNMP_COMUNIDADE, { timeout: 2000, repeticoes: 1, porta: SNMP_PORTA });
+    const r = await snmp.lerSuprimentos(c.ip, com, { timeout: 2500, repeticoes: 1, porta: SNMP_PORTA });
     return { ...r, ip: c.ip };
-  } catch (e) { return { ok: false, ip: c.ip, erro: explicarErroSnmp(e), sysDescr: e.sysDescr || '', lidoEm: new Date().toISOString() }; }
+  } catch (e) { return { ok: false, ip: c.ip, erro: await diagnosticarSnmp(c, com, e), sysDescr: e.sysDescr || '', lidoEm: new Date().toISOString() }; }
 }
 async function rodadaSuprimentos({ selb = '', forcar = false } = {}) {
   if (suprRodando) return suprRodando;

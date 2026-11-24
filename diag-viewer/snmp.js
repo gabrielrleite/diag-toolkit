@@ -63,9 +63,9 @@ function valor(buf, no) {
 }
 function decodificar(buf) {
   const raiz = ler(buf, 0), [, , pdu] = filhos(buf, raiz);
-  const [id, erro, , vbs] = filhos(buf, pdu);
+  const [id, erro, indice, vbs] = filhos(buf, pdu);
   return {
-    tipo: pdu.tag, id: valor(buf, id), erro: valor(buf, erro),
+    tipo: pdu.tag, id: valor(buf, id), erro: valor(buf, erro), indice: valor(buf, indice), // GetBulk: erro = non-repeaters, indice = max-repetitions
     vbs: filhos(buf, vbs).map(vb => { const [o, v] = filhos(buf, vb); return { oid: valor(buf, o), valor: valor(buf, v), tag: v.tag }; }),
   };
 }
@@ -94,39 +94,72 @@ async function pedirComRepeticao(sock, host, porta, montar, opc) {
 const dentro = (o, raiz) => o === raiz || o.startsWith(raiz + '.');
 
 // percorre as subárvores pedidas; devolve Map(oid -> valor)
+// v2c com GetBulk em respostas pequenas (cabem num pacote: alguns firewalls/VPNs descartam UDP fragmentado);
+// se falhar, tenta pedaços menores e, por fim, v1 com GetNext (uma linha por pedido).
 async function percorrer(host, comunidade, raizes, opc = {}) {
-  opc = { porta: 161, timeout: 1500, repeticoes: 1, maxRep: 24, versao: 'auto', ...opc };
+  opc = { porta: 161, timeout: 1500, repeticoes: 1, maxVbs: 30, versao: 'auto', ...opc };
   const sock = dgram.createSocket('udp4'), out = new Map();
+  let respondeu = false;
   try {
     await new Promise((ok, erro) => { sock.once('error', erro); sock.bind(0, ok); });
-    // v2c com GetBulk (rápido); se não responder, v1 com GetNext
     if (opc.versao !== 'v1') {
-      try {
-        let ativos = raizes.map(r => ({ raiz: r, ultimo: r }));
-        for (let volta = 0; ativos.length && volta < 60; volta++) {
-          const r = await pedirComRepeticao(sock, host, opc.porta, id => mensagem(1, comunidade, 0xa5, id, 0, opc.maxRep, ativos.map(a => a.ultimo)), opc);
+      let ativos = raizes.map(r => ({ raiz: r, ultimo: r })), orcamento = opc.maxVbs, falhaV2;
+      for (let volta = 0; ativos.length && volta < 300; volta++) {
+        // até "orcamento" valores por resposta; com muitas colunas, pede só algumas de cada vez
+        const lote = ativos.slice(0, Math.max(1, Math.min(ativos.length, orcamento)));
+        const maxRep = Math.max(1, Math.floor(orcamento / lote.length));
+        let r;
+        try {
+          r = await pedirComRepeticao(sock, host, opc.porta, id => mensagem(1, comunidade, 0xa5, id, 0, maxRep, lote.map(a => a.ultimo)), opc);
+          respondeu = true;
+          if (r.erro === 1) throw new Error('resposta grande demais (tooBig)');
           if (r.erro) throw new Error('erro SNMP ' + r.erro);
-          const n = ativos.length, acabou = new Set();
-          r.vbs.forEach((vb, k) => {
-            const a = ativos[k % n];
-            if (acabou.has(a) || !vb.oid || (vb.valor && vb.valor.fim) || !dentro(vb.oid, a.raiz)) { acabou.add(a); return; }
-            if (vb.oid !== a.ultimo) { out.set(vb.oid, vb.valor); a.ultimo = vb.oid; }
-          });
-          ativos = ativos.filter(a => !acabou.has(a));
+        } catch (e) {
+          // pedaços menores (sem nenhuma resposta ainda, vai direto ao menor: um valor por pedido)
+          if (orcamento > 1) { orcamento = respondeu && orcamento > 8 ? 8 : 1; volta--; continue; }
+          falhaV2 = e; break;
         }
-        return { versao: 'v2c', valores: out };
-      } catch (e) { if (opc.versao === 'v2c' || out.size) throw e; }
+        const n = lote.length, acabou = new Set();
+        r.vbs.forEach((vb, k) => {
+          const a = lote[k % n];
+          if (acabou.has(a) || !vb.oid || (vb.valor && vb.valor.fim) || !dentro(vb.oid, a.raiz)) { acabou.add(a); return; }
+          if (vb.oid !== a.ultimo) { out.set(vb.oid, vb.valor); a.ultimo = vb.oid; }
+        });
+        // não avançou nenhuma coluna: evita laço infinito
+        if (!r.vbs.length) lote.forEach(a => acabou.add(a));
+        ativos = ativos.filter(a => !acabou.has(a));
+      }
+      if (!falhaV2) return { versao: 'v2c', valores: out };
+      if (opc.versao === 'v2c') throw falhaV2;
     }
     for (const raiz of raizes) {
       let atual = raiz;
       for (let k = 0; k < 300; k++) {
         const r = await pedirComRepeticao(sock, host, opc.porta, id => mensagem(0, comunidade, 0xa1, id, 0, 0, [atual]), opc);
+        respondeu = true;
         const vb = r.vbs[0];
         if (r.erro || !vb || !dentro(vb.oid, raiz) || (vb.valor && vb.valor.fim)) break;
         out.set(vb.oid, vb.valor); atual = vb.oid;
       }
     }
     return { versao: 'v1', valores: out };
+  } catch (e) { e.nenhumaResposta = !respondeu; throw e; } finally { sock.close(); }
+}
+
+// sonda rápida (um pedido pequeno, sysDescr): diz se o equipamento responde por SNMP e com qual versão
+async function sondar(host, comunidade, opc = {}) {
+  opc = { porta: 161, timeout: 1500, repeticoes: 1, ...opc };
+  const sock = dgram.createSocket('udp4'), raiz = '1.3.6.1.2.1.1.1';
+  try {
+    await new Promise((ok, erro) => { sock.once('error', erro); sock.bind(0, ok); });
+    for (const [v, nome] of [[1, 'v2c'], [0, 'v1']]) {
+      try {
+        const r = await pedirComRepeticao(sock, host, opc.porta, id => mensagem(v, comunidade, 0xa1, id, 0, 0, [raiz]), opc);
+        const vb = r.vbs[0];
+        return { versao: nome, sysDescr: vb && dentro(vb.oid, raiz) ? texto(vb.valor) : '' };
+      } catch { /* tenta a próxima versão */ }
+    }
+    return null;
   } finally { sock.close(); }
 }
 
@@ -190,4 +223,4 @@ async function lerSuprimentos(ip, comunidade = 'public', opc = {}) {
   };
 }
 
-module.exports = { percorrer, lerSuprimentos, classificar, codigoDe, LIMITE_BAIXO, _ber: { mensagem, decodificar, oid, int, tlv, seq } };
+module.exports = { percorrer, sondar, lerSuprimentos, classificar, codigoDe, LIMITE_BAIXO, _ber: { mensagem, decodificar, oid, int, tlv, seq } };

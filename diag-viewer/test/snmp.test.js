@@ -4,7 +4,9 @@ const assert = require('assert'), dgram = require('dgram');
 const snmp = require('../snmp.js'), { decodificar, oid, int, tlv, seq } = snmp._ber;
 
 // agente: responde GetNext (v1/v2c) e GetBulk (v2c) a partir de uma tabela ordenada
-function agente(tabela, { comunidade = 'public', soV1 = false } = {}) {
+// maxVbs: descarta respostas com mais valores (simula rede que perde UDP fragmentado); tooBig: responde erro 1
+// mudo: nunca responde; pedidos: conta os pedidos recebidos
+function agente(tabela, { comunidade = 'public', soV1 = false, maxVbs = 0, tooBig = 0, mudo = false } = {}) {
   const ordem = o => o.split('.').map(Number);
   const cmp = (a, b) => { const x = ordem(a), y = ordem(b); for (let k = 0; k < Math.min(x.length, y.length); k++) if (x[k] !== y[k]) return x[k] - y[k]; return x.length - y.length; };
   const t = [...tabela].sort((a, b) => cmp(a[0], b[0]));
@@ -19,14 +21,17 @@ function agente(tabela, { comunidade = 'public', soV1 = false } = {}) {
       const raiz = tam(0), v = tam(raiz.ini), c = tam(v.ini + v.n);
       versao = buf[v.ini]; com = buf.subarray(c.ini, c.ini + c.n).toString(); req = decodificar(buf);
     } catch { return; }
-    if (com !== comunidade || (soV1 && versao !== 0)) return; // comunidade errada / versão não suportada: silêncio
+    sock.pedidos = (sock.pedidos || 0) + 1;
+    if (mudo || com !== comunidade || (soV1 && versao !== 0)) return; // comunidade errada / versão não suportada: silêncio
     const vbs = [];
     if (req.tipo === 0xa1) for (const vb of req.vbs) { const n = prox(vb.oid); vbs.push(n ? seq(oid(n[0]), valor(n)) : seq(oid(vb.oid), Buffer.from([0x82, 0]))); }
     if (req.tipo === 0xa5) {
-      const atuais = req.vbs.map(vb => vb.oid), maxRep = Math.min(req.vbs.length ? 10 : 0, 10);
+      const atuais = req.vbs.map(vb => vb.oid), maxRep = Math.min(req.indice, 50);
       for (let r = 0; r < maxRep; r++) atuais.forEach((o, k) => { const n = o && prox(o); atuais[k] = n ? n[0] : null; vbs.push(n ? seq(oid(n[0]), valor(n)) : seq(oid(o || '1.3'), Buffer.from([0x82, 0]))); });
     }
-    const resp = seq(int(versao), tlv(0x04, Buffer.from(com)), tlv(0xa2, Buffer.concat([int(req.id), int(0), int(0), seq(...vbs)])));
+    if (maxVbs && vbs.length > maxVbs) return;
+    const grande = tooBig && vbs.length > tooBig;
+    const resp = seq(int(versao), tlv(0x04, Buffer.from(com)), tlv(0xa2, Buffer.concat([int(req.id), int(grande ? 1 : 0), int(0), seq(...(grande ? [] : vbs))])));
     sock.send(resp, rinfo.port, rinfo.address);
   });
   return new Promise(ok => sock.bind(0, '127.0.0.1', () => ok(sock)));
@@ -63,6 +68,26 @@ const brother = [
   assert.strictEqual(r2.versao, 'v1');
   assert.strictEqual(r2.itens.length, 3);
   a2.close();
+  // rede que descarta respostas grandes: reduz o tamanho e continua em v2c, com os mesmos dados
+  for (const o of [{ maxVbs: 9 }, { tooBig: 5 }]) {
+    const a = await agente(brother, o);
+    const rr = await snmp.lerSuprimentos('127.0.0.1', 'public', { porta: a.address().port, timeout: 150, repeticoes: 0 });
+    assert.strictEqual(rr.versao, 'v2c', JSON.stringify(o));
+    assert.strictEqual(rr.itens.length, 3, JSON.stringify(o));
+    assert.strictEqual(rr.modelo, 'Brother HL-L5100DN series');
+    a.close();
+  }
+  // nunca responde: erro marcado como "nenhuma resposta" (para o diagnóstico), poucos pedidos
+  const a3 = await agente(brother, { mudo: true });
+  const e3 = await snmp.lerSuprimentos('127.0.0.1', 'public', { porta: a3.address().port, timeout: 100, repeticoes: 0 }).catch(e => e);
+  assert.match(e3.message, /sem resposta/); assert.strictEqual(e3.nenhumaResposta, true);
+  assert.ok(a3.pedidos <= 3, 'pedidos: ' + a3.pedidos);
+  a3.close();
+  // sonda: responde (v2c / só v1) ou não
+  const a4 = await agente(brother, { soV1: true });
+  assert.deepStrictEqual(await snmp.sondar('127.0.0.1', 'public', { porta: a4.address().port, timeout: 150, repeticoes: 0 }), { versao: 'v1', sysDescr: 'Brother NC-8300w' });
+  assert.strictEqual(await snmp.sondar('127.0.0.1', 'outra', { porta: a4.address().port, timeout: 100, repeticoes: 0 }), null);
+  a4.close();
   // classificação por nome/cor
   assert.strictEqual(snmp.classificar('Toner Cyan', '', 3, 3), 'azul');
   assert.strictEqual(snmp.classificar('Cartucho de tinta', 'yellow', 3, 6), 'amarelo');
