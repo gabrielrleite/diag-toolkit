@@ -740,3 +740,33 @@ td .it-obs { display: inline-block; max-width: 380px; vertical-align: bottom; }
 .mon-lat .ponto { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
 .mon-dica { position: absolute; transform: translate(-50%, calc(-100% - 12px)); pointer-events: none; padding: 6px 9px; border-radius: 8px; font-size: 12px; line-height: 1.35; white-space: nowrap;
   background: var(--ink); color: var(--panel); box-shadow: var(--shadow); }
+
+/* ---------- suprimentos (tinta/toner/caixa lidos por SNMP) */
+.sup-lista { display: flex; flex-direction: column; gap: 8px; }
+.sup-linha { display: grid; grid-template-columns: minmax(130px, 200px) 1fr minmax(150px, auto); gap: 12px; align-items: center; font-size: 13px; }
+.sup-nome { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sup-trilho { display: block; height: 10px; border-radius: 999px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; }
+.sup-fill { display: block; height: 100%; border-radius: 999px; background: var(--muted); }
+.sup-fill.it-preto { background: #1f2430; } .sup-fill.it-azul { background: #06b6d4; } .sup-fill.it-magenta { background: #db2777; } .sup-fill.it-amarelo { background: #eab308; }
+.sup-fill.it-caixa { background: repeating-linear-gradient(135deg, #64748b 0 5px, #94a3b8 5px 10px); }
+:root[data-theme="dark"] .sup-fill.it-preto { background: #cbd5e1; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sup-fill.it-preto { background: #cbd5e1; } }
+.sup-val { font-variant-numeric: tabular-nums; color: var(--ink-2); white-space: nowrap; }
+.it-bola.it-nd { --c: var(--line-2); }
+.sup-mini { display: grid; grid-template-columns: repeat(5, 44px); gap: 6px; }
+.sup-m { display: flex; flex-direction: column; gap: 2px; }
+.sup-m .sup-trilho { height: 7px; }
+.sup-m small { font-size: 10.5px; text-align: center; font-variant-numeric: tabular-nums; }
+.sup-m.est-baixo small, .sup-m.est-quase-cheia small { color: var(--warn); font-weight: 700; }
+.sup-m.est-vazio small, .sup-m.est-cheia small { color: var(--bad); font-weight: 700; }
+.imp-status.supr-status { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: linear-gradient(100deg, var(--warn-soft), var(--panel) 75%); }
+.imp-ic.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.imp-item.sup { border-color: color-mix(in srgb, var(--warn) 30%, var(--line)); flex-wrap: wrap; }
+.sup-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.sup-tag { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 6px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--warn-soft); color: var(--warn); }
+.sup-tag.bad { background: var(--bad-soft); color: var(--bad); }
+.sf-testar { display: flex; flex-direction: column; gap: 4px; justify-content: flex-end; }
+.sf-testar .btn { align-self: flex-start; }
+.sf-snmp { margin: 14px 0 4px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel-2); }
+.sf-snmp-cab { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+@media (max-width: 700px) { .sup-linha { grid-template-columns: 110px 1fr; } .sup-val { grid-column: 1 / -1; } }

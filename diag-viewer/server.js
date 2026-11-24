@@ -24,6 +24,8 @@
   - GET /api/receb-selbs, PUT/DELETE /api/receb-selbs/:selb   cadastro dos SELBs (equipamento, cores, tinta/toner)
   - GET /api/monitor, POST /api/monitor/verificar   ping das impressoras com IP (a cada MONITOR_MIN minutos)
   - POST/DELETE /api/monitor/pausa, GET /api/monitor/historico?selb=&dias=, GET /api/monitor/quedas?dias=
+  - GET /api/suprimentos, POST /api/suprimentos/ler, POST /api/suprimentos/testar, GET /api/suprimentos/historico
+    níveis de tinta/toner/caixa pelas impressoras (SNMP, Printer MIB), a cada SUPRIMENTOS_HORAS horas
   - GET /api/ocr/saude, POST /api/ocr   repasse ao serviço diag-ocr (TrOCR), se OCR_URL estiver definido
   - GET /api/treino, PUT /api/treino/config, POST /api/treino/exemplos, POST /api/treino/esquecer,
     GET /api/treino/exportar.zip, DELETE /api/treino   modo treinamento (aprender com as correções)
@@ -655,6 +657,7 @@ function sanitizeSelbCad(b) {
     cor, suprimento, cores: [...new Set(cores)],
     // toda impressora usa caixa de manutenção; scanner (sem suprimento) não
     caixa: !(b && b.tipo === 'scanner') && suprimento !== 'nenhum',
+    comunidade: t('comunidade', 64), // comunidade SNMP de leitura (vazio = "public")
     ip: /^(\d{1,3}\.){3}\d{1,3}$/.test(t('ip', 15)) && t('ip', 15).split('.').every(n => +n <= 255) ? t('ip', 15) : '',
     obs: txt(b && b.obs, 2000),
   };
@@ -927,6 +930,96 @@ setTimeout(() => rodadaMonitor().catch(e => console.error('monitor:', e.message)
 setInterval(() => rodadaMonitor().catch(e => console.error('monitor:', e.message)), MONITOR_MIN * 60000).unref();
 setTimeout(() => limparHistoricoMonitor().catch(() => {}), 60000).unref();
 setInterval(() => limparHistoricoMonitor().catch(() => {}), 86400000).unref();
+
+// ------------------------------------------------------------------ suprimentos das impressoras (SNMP)
+// A cada SUPRIMENTOS_HORAS horas (padrão 6) lê, por SNMP, os níveis de tinta/toner e da caixa de manutenção
+// de cada SELB com IP (pula as fora do ar e as pausadas). Consulta de ~100 bytes; resposta de poucas centenas.
+// Último resultado em recebimentos/monitor/suprimentos.json; histórico em suprimentos-AAAA-MM.jsonl.
+const snmp = require('./snmp');
+const SUPR_HORAS = Math.max(1, +process.env.SUPRIMENTOS_HORAS || 6);
+const SUPR_DIAS = Math.max(30, +process.env.SUPRIMENTOS_DIAS || 365);
+const SUPR_FILE = path.join(MON_DIR, 'suprimentos.json');
+const SNMP_COMUNIDADE = process.env.SNMP_COMUNIDADE || 'public';
+const SNMP_PORTA = +process.env.SNMP_PORTA || 161;
+let supr = { rodada: null, selbs: {} }, suprRodando = null;
+try { supr = { ...supr, ...JSON.parse(fs.readFileSync(SUPR_FILE, 'utf8')) }; } catch { /* primeira vez */ }
+const explicarErroSnmp = e => /sem resposta/.test(e.message)
+  ? 'sem resposta SNMP: verifique se o SNMP está ligado na impressora, a comunidade (padrão "public") e se a porta 161/UDP está liberada'
+  : e.message;
+async function lerUma(c) {
+  try {
+    const r = await snmp.lerSuprimentos(c.ip, c.comunidade || SNMP_COMUNIDADE, { timeout: 2000, repeticoes: 1, porta: SNMP_PORTA });
+    return { ...r, ip: c.ip };
+  } catch (e) { return { ok: false, ip: c.ip, erro: explicarErroSnmp(e), sysDescr: e.sysDescr || '', lidoEm: new Date().toISOString() }; }
+}
+async function rodadaSuprimentos({ selb = '', forcar = false } = {}) {
+  if (suprRodando) return suprRodando;
+  suprRodando = (async () => {
+    limparPausasVencidas();
+    if (monitor.pausa.geral && !forcar) return;
+    let cads = (await lerSelbsCad()).selbs.filter(c => ipOk(c.ip));
+    if (selb) cads = cads.filter(c => chaveSelbRec(c.selb) === chaveSelbRec(selb));
+    // automática: pula pausadas e fora do ar; manual ("Ler suprimentos"): tenta todas as não pausadas
+    else cads = cads.filter(c => !selbPausado(c.selb) && (forcar || !(monitor.estados[c.ip] && monitor.estados[c.ip].online === false)));
+    const fila = [...cads], linhas = [];
+    const trabalhar = async () => {
+      while (fila.length) {
+        const c = fila.shift(), r = await lerUma(c);
+        supr.selbs[chaveSelbRec(c.selb)] = { selb: c.selb, ...r };
+        if (r.ok) linhas.push(JSON.stringify({ t: r.lidoEm, s: c.selb, i: r.itens.map(i => [i.item, i.pct, i.estado, i.desc]) }));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, cads.length) }, trabalhar));
+    if (linhas.length) await fsp.appendFile(path.join(MON_DIR, `suprimentos-${new Date().toISOString().slice(0, 7)}.jsonl`), linhas.join('\n') + '\n');
+    if (!selb) supr.rodada = new Date().toISOString();
+    // SELB que saiu do cadastro (ou ficou sem IP) sai da lista
+    const validos = new Set((await lerSelbsCad()).selbs.filter(c => ipOk(c.ip)).map(c => chaveSelbRec(c.selb)));
+    for (const k of Object.keys(supr.selbs)) if (!validos.has(k)) delete supr.selbs[k];
+    await writeJsonAtomic(SUPR_FILE, supr).catch(e => console.error('suprimentos:', e.message));
+  })().finally(() => { suprRodando = null; });
+  return suprRodando;
+}
+async function limparHistoricoSuprimentos() {
+  const limite = new Date(Date.now() - SUPR_DIAS * 86400000).toISOString().slice(0, 7);
+  for (const n of await fsp.readdir(MON_DIR).catch(() => [])) {
+    const m = n.match(/^suprimentos-(\d{4}-\d{2})\.jsonl$/);
+    if (m && m[1] < limite) await fsp.rm(path.join(MON_DIR, n), { force: true });
+  }
+}
+async function suprimentosRoute(req, res, url, acao) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  if (acao === 'testar') {
+    // teste avulso (botão "Testar leitura" no cadastro): não grava nada
+    if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+    let b; try { b = await readJsonBody(req); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+    const ip = txt(b.ip, 15).trim();
+    if (!ipOk(ip)) return json(res, 400, { erro: 'IP inválido.' });
+    const r = await lerUma({ ip, comunidade: txt(b.comunidade, 64).trim() });
+    await audit({ acao: 'suprimentos_teste', ip, ok: r.ok, ipCliente: ipOf(req) });
+    return json(res, 200, r);
+  }
+  if (acao === 'ler') {
+    if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+    let b = {}; try { b = await readJsonBody(req); } catch { /* sem corpo = todas */ }
+    await rodadaSuprimentos({ selb: txt(b.selb, 40).trim(), forcar: true });
+  } else if (acao === 'historico') {
+    const selb = txt(url.searchParams.get('selb'), 40).trim(), dias = Math.max(1, Math.min(SUPR_DIAS, +url.searchParams.get('dias') || 90));
+    if (!selb) return json(res, 400, { erro: 'Informe o SELB.' });
+    const desde = Date.now() - dias * 86400000, pontos = [];
+    for (const n of (await fsp.readdir(MON_DIR).catch(() => [])).filter(n => /^suprimentos-\d{4}-\d{2}\.jsonl$/.test(n)).sort()) {
+      if (n.slice(12, 19) < new Date(desde).toISOString().slice(0, 7)) continue;
+      for (const l of (await fsp.readFile(path.join(MON_DIR, n), 'utf8').catch(() => '')).split('\n')) {
+        if (!l) continue;
+        try { const o = JSON.parse(l); if (chaveSelbRec(o.s) === chaveSelbRec(selb) && Date.parse(o.t) >= desde) pontos.push({ t: o.t, itens: o.i }); } catch { /* linha incompleta */ }
+      }
+    }
+    return json(res, 200, { selb, dias, pontos });
+  } else if (req.method !== 'GET') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+  json(res, 200, { horas: SUPR_HORAS, rodada: supr.rodada, lendo: !!suprRodando, selbs: supr.selbs });
+}
+setTimeout(() => rodadaSuprimentos().catch(e => console.error('suprimentos:', e.message)), 120000).unref(); // 2 min após subir
+setInterval(() => rodadaSuprimentos().catch(e => console.error('suprimentos:', e.message)), SUPR_HORAS * 3600000).unref();
+setInterval(() => limparHistoricoSuprimentos().catch(() => {}), 86400000).unref();
 
 // ------------------------------------------------------------------ OCR no servidor (repasse ao diag-ocr)
 async function ocrRoute(req, res, url, acao) {
@@ -1608,6 +1701,8 @@ const server = http.createServer(async (req, res) => {
     if (oc) return await ocrRoute(req, res, url, oc[1]);
     const tr = p.match(/^\/api\/treino(?:\/(config|exemplos|esquecer|exportar\.zip))?$/);
     if (tr) return await treinoRoute(req, res, url, tr[1]);
+    const su = p.match(/^\/api\/suprimentos(?:\/(ler|testar|historico))?$/);
+    if (su) return await suprimentosRoute(req, res, url, su[1]);
     const mo = p.match(/^\/api\/monitor(?:\/(verificar|pausa|historico|quedas))?$/);
     if (mo) return await monitorRoute(req, res, url, mo[1]);
     const sc = p.match(/^\/api\/receb-selbs(?:\/([^/]+))?$/);

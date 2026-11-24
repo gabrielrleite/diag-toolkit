@@ -1,6 +1,6 @@
 FROM node:22-alpine
 WORKDIR /app
-COPY server.js ./
+COPY server.js snmp.js ./
 COPY web/ ./web/
 RUN mkdir -p /data && chown node:node /data
 ENV PORT=8080 DATA_DIR=/data NODE_ENV=production

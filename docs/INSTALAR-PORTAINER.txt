@@ -79,6 +79,21 @@ MONITORAMENTO DAS IMPRESSORAS (ping):
     impressora; 1 h, 8 h, 24 h ou até retomar). Histórico guardado por 30
     dias (variável opcional MONITOR_DIAS).
 
+TINTA / TONER / CAIXA DE MANUTENÇÃO PELA REDE (SNMP):
+  A cada 6 horas (variável opcional SUPRIMENTOS_HORAS) o servidor lê os
+  níveis de cada SELB com IP. Aparecem em Recebimentos > Impressoras e,
+  quando baixos, na tela inicial.
+  - Requisitos: SNMP ligado na impressora (v1 ou v2c), comunidade de
+    leitura (padrão "public"; outra pode ser informada no cadastro do
+    SELB) e a porta 161/UDP liberada do servidor até as impressoras.
+  - Teste: Recebimentos > SELBs > Cadastro > "Testar leitura".
+  - Onde ligar (página web da impressora, pelo IP):
+      Brother: Network > Protocol > SNMP (habilitar v1/v2c, leitura).
+      Epson:   Network Settings > Protocol > SNMP (comunidade de leitura).
+      Ricoh:   Web Image Monitor > Configuration > Network > SNMP.
+  - Tanque de tinta (EcoTank etc.) não mede o nível de verdade: aparece
+    como estimado ou "não informado".
+
 MODO TREINAMENTO (Recebimentos > Treinamento):
   Ligado por padrão. Cada linha CONFERIDA guarda o que o OCR leu em Local,
   SELB e Data e o texto final (com o recorte dessas células; CPF, nome e

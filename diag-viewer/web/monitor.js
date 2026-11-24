@@ -11,6 +11,43 @@
   A tela consulta o servidor a cada minuto. Depende de app.js (api, esc, IC) e de receb-cadastro.js (abasReceb).
 */
 const MON = { dados: null, porIp: new Map(), timer: null, diasDet: 7 };
+// níveis de tinta/toner/caixa lidos por SNMP (GET /api/suprimentos)
+const SUP = { dados: null };
+
+// ---------------------------------------------------------------- suprimentos: barras nas cores reais
+const SUP_NOME = { preto: 'Preto', azul: 'Azul', magenta: 'Magenta', amarelo: 'Amarelo', caixa: 'Caixa' };
+const SUP_ALERTA = ['baixo', 'vazio', 'quase cheia', 'cheia'];
+function valorSup(i) {
+  if (i.pct != null) return i.receptaculo ? `${i.pct}% cheia` : `${i.pct}%`;
+  return { tem: i.receptaculo ? 'com espaço' : 'há suprimento', desconhecido: 'não informado', 'sem limite': '—' }[i.estado] || '—';
+}
+const nomeSup = i => i.item === 'outro' ? i.desc || i.tipoTxt || 'Outro' : SUP_NOME[i.item];
+// lista completa (cadastro, detalhe): uma barra por suprimento
+function suprimentosHtml(itens) {
+  if (!itens || !itens.length) return '<p class="muted">A impressora não informou suprimentos.</p>';
+  const ordem = ['preto', 'azul', 'magenta', 'amarelo', 'caixa', 'outro'];
+  return `<div class="sup-lista">${[...itens].sort((a, b) => ordem.indexOf(a.item) - ordem.indexOf(b.item)).map(i => `
+    <div class="sup-linha est-${esc(i.estado.replace(' ', '-'))}" title="${esc(i.desc)}${i.tipoTxt ? ' · ' + esc(i.tipoTxt) : ''}">
+      <span class="sup-nome"><span class="it-bola it-${i.item === 'outro' ? 'nd' : i.item}">${i.item === 'caixa' ? IC('caixa') : ''}</span>${esc(nomeSup(i))}</span>
+      <span class="sup-trilho"><span class="sup-fill it-${i.item}" style="width:${i.pct ?? (i.estado === 'tem' ? 100 : 0)}%"></span></span>
+      <span class="sup-val">${esc(valorSup(i))}${SUP_ALERTA.includes(i.estado) ? ` <span class="badge ${['vazio', 'cheia'].includes(i.estado) ? 'bad' : 'warn'}">${esc(i.estado)}</span>` : ''}</span>
+    </div>`).join('')}</div>`;
+}
+// versão compacta (tabela de impressoras): só tintas/toners e caixa
+function suprimentosMini(s) {
+  if (!s) return '<span class="muted">—</span>';
+  if (!s.ok) return `<span class="badge" title="${esc(s.erro || '')}">sem leitura</span>`;
+  const it = s.itens.filter(i => i.item !== 'outro');
+  if (!it.length) return '<span class="muted">—</span>';
+  return `<div class="sup-mini">${it.map(i => `<span class="sup-m est-${esc(i.estado.replace(' ', '-'))}" title="${esc(nomeSup(i))}: ${esc(valorSup(i))}">
+    <span class="sup-trilho"><span class="sup-fill it-${i.item}" style="width:${i.pct ?? (i.estado === 'tem' ? 100 : 0)}%"></span></span><small>${i.pct != null ? i.pct + '%' : '·'}</small></span>`).join('')}</div>`;
+}
+const supDe = selb => SUP.dados && SUP.dados.selbs[RecebOCR.chaveSelb(selb)];
+const alertasSup = s => s && s.ok ? s.itens.filter(i => i.item !== 'outro' && SUP_ALERTA.includes(i.estado)) : [];
+async function lerSuprimentosAgora(selb = '') {
+  const r = await api('api/suprimentos/ler', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selb }) }).catch(() => null);
+  if (r && r.ok) SUP.dados = await r.json();
+}
 
 const haQuanto = iso => {
   if (!iso) return '';
@@ -50,6 +87,8 @@ async function atualizarMonitor(verificarAgora = false) {
   if (!r || !r.ok) { MON.dados = null; desenharMonitor(); return; }
   MON.dados = await r.json();
   MON.porIp = new Map(MON.dados.impressoras.map(i => [i.ip, i]));
+  const rs = await api('api/suprimentos').catch(() => null);
+  if (rs && rs.ok) SUP.dados = await rs.json();
   desenharMonitor();
 }
 async function pausar(alvo, horas) {
@@ -110,6 +149,24 @@ function desenharMonitor() {
   const b = document.getElementById('monVerificar');
   if (b) b.addEventListener('click', async () => { b.disabled = true; b.innerHTML = `${IC('relogio')}Verificando…`; await atualizarMonitor(true); });
   ligarPausa(box, () => {});
+  desenharSuprStatus();
+}
+
+// tela inicial: tinta/toner baixo ou caixa de manutenção quase cheia
+function desenharSuprStatus() {
+  const box = document.getElementById('suprStatus');
+  if (!box) return;
+  const imps = (MON.dados && !MON.dados.pausa ? MON.dados.impressoras : []).filter(i => !i.pausada);
+  const com = imps.map(i => ({ i, a: alertasSup(supDe(i.selb)) })).filter(x => x.a.length)
+    .sort((x, y) => Math.min(...x.a.map(z => z.receptaculo ? 100 - (z.pct ?? 0) : z.pct ?? 0)) - Math.min(...y.a.map(z => z.receptaculo ? 100 - (z.pct ?? 0) : z.pct ?? 0)));
+  if (!com.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = `<div class="imp-linha"><span class="imp-ic warn">${IC('caixa')}</span>
+    <div><b>${com.length === 1 ? '1 impressora com suprimento baixo' : `${com.length} impressoras com suprimento baixo`}</b><br><small>Tinta/toner até 15% ou caixa de manutenção a partir de 75% · leitura a cada ${SUP.dados.horas} h${SUP.dados.rodada ? `, última ${haQuanto(SUP.dados.rodada)}` : ''}</small></div>
+    <div class="imp-acoes"><a class="btn ghost small" href="#receb/impressoras">${IC('grafico')}Ver impressoras</a></div></div>
+    <div class="imp-lista">${com.map(({ i, a }) => `<div class="imp-item sup">
+      <div><b>${esc(i.selb)}</b> <span class="muted">${esc(nomeImp(i))}</span>${i.local ? `<br><small>${esc(i.local)}</small>` : ''}</div>
+      <div class="sup-tags">${a.map(z => `<span class="sup-tag ${['vazio', 'cheia'].includes(z.estado) ? 'bad' : 'warn'}"><span class="it-bola it-${z.item}">${z.item === 'caixa' ? IC('caixa') : ''}</span>${esc(SUP_NOME[z.item])} ${esc(valorSup(z))}</span>`).join('')}</div></div>`).join('')}</div>`;
 }
 
 // ================================================================== Recebimentos › Impressoras
@@ -142,23 +199,26 @@ async function renderImpressoras(arg = '') {
     <div class="panel">
       <div class="head-row"><h2>Monitoramento das impressoras</h2><div class="filters" style="margin:0">
         ${D.pausa ? `<span class="badge warn">pausado ${esc(ateTxt(D.pausa))}</span><button class="btn small" data-retomar="todos">Retomar</button>` : menuPausa('todos', 'Pausar monitoramento')}
+        <button class="btn ghost small" id="impSupr" title="Lê agora tinta/toner e caixa de todas as impressoras (SNMP)">${IC('caixa')}Ler suprimentos</button>
         <button class="btn ghost small" id="impVerificar">${IC('raio')}Verificar agora</button></div></div>
       <div class="stats">
         ${statHtml(ativas.length - fora, 'online', 'check', 'ok')}
         ${statHtml(fora, 'fora do ar', 'alerta', fora ? 'bad' : '')}
         ${statHtml(imps.length - ativas.length, 'pausadas', 'relogio', '')}
         ${statHtml(pctTxt(media7), 'disponibilidade média em 7 dias', 'grafico', 'violeta')}
+        ${statHtml(imps.filter(i => alertasSup(supDe(i.selb)).length).length, 'com suprimento baixo', 'caixa', imps.some(i => alertasSup(supDe(i.selb)).length) ? 'warn' : '')}
       </div>
       <p class="muted">Ping com o menor pacote possível a cada ${D.intervaloMin} min; histórico de ${D.dias} dias. ${D.rodada ? `Última verificação ${haQuanto(D.rodada)}.` : ''}
         Só entram SELBs com IP no cadastro (aba SELBs).</p>
       ${!imps.length ? vazioHtml('impressora', 'Nenhuma impressora com IP', 'Cadastre o IP das impressoras na aba SELBs para monitorar.') : `
       ${legendaStatus()}
-      <div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Impressora</th><th class="nosort">Situação</th><th class="nosort">Últimas 24 h</th><th class="nosort">24 h</th><th class="nosort">7 dias</th><th class="nosort">Quedas (7 d)</th><th class="nosort"></th></tr></thead><tbody>
+      <div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Impressora</th><th class="nosort">Situação</th><th class="nosort">Tinta / toner / caixa</th><th class="nosort">Últimas 24 h</th><th class="nosort">24 h</th><th class="nosort">7 dias</th><th class="nosort">Quedas (7 d)</th><th class="nosort"></th></tr></thead><tbody>
       ${imps.map(i => `<tr data-imp="${esc(i.selb)}">
         <td><b>${esc(i.selb)}</b> <span class="muted">${esc(nomeImp(i))}</span><br><small>${i.local ? esc(i.local) + ' · ' : ''}<a class="ip-link" href="http://${esc(i.ip)}" target="_blank" rel="noopener">${esc(i.ip)}</a></small></td>
         <td>${i.pausada || D.pausa ? `<span class="badge">pausada ${esc(ateTxt(i.pausada || D.pausa))}</span>`
           : i.online === null ? '<span class="badge">aguardando</span>' : i.online ? `<span class="badge ok">online</span><br><small>${i.ms != null ? `~${i.ms} ms · ` : ''}${haQuanto(i.verificadoEm)}</small>`
           : `<span class="badge bad">fora do ar</span><br><small>${haQuanto(i.desde)}</small>`}</td>
+        <td>${suprimentosMini(supDe(i.selb))}</td>
         <td>${barra24h(i.faixas)}</td>
         <td class="t">${pctTxt(i.d24)}</td><td class="t">${pctTxt(i.d7)}</td><td>${i.quedas7 || 0}</td>
         <td class="acoes">${i.pausada ? `<button class="btn ghost small" data-retomar="${esc(i.selb)}">Retomar</button>` : menuPausa(i.selb)}</td></tr>`).join('')}
@@ -178,6 +238,7 @@ async function renderImpressoras(arg = '') {
     location.hash = 'receb/impressoras~' + encodeURIComponent(tr.dataset.imp);
   }));
   $('#impVerificar').addEventListener('click', async e => { e.target.disabled = true; e.target.textContent = 'Verificando…'; await atualizarMonitor(true); renderImpressoras(); });
+  $('#impSupr').addEventListener('click', async e => { e.currentTarget.disabled = true; e.currentTarget.textContent = 'Lendo…'; await lerSuprimentosAgora(); renderImpressoras(); });
   ligarPausa(el, () => renderImpressoras());
 }
 
@@ -207,6 +268,12 @@ async function renderImpressora(selb) {
       ${statHtml(duracao(foraMin), 'tempo fora do ar', 'relogio', '')}
       ${statHtml(ms.length ? '~' + Math.round(ms.reduce((a, b) => a + b, 0) / ms.length) + ' ms' : '—', 'latência média', 'raio', 'violeta')}
     </div>
+    <div class="panel"><div class="head-row"><h2>Tinta, toner e caixa de manutenção</h2><div class="filters" style="margin:0">
+        <small class="muted">${supDe(selb) ? `lido ${haQuanto(supDe(selb).lidoEm)}${supDe(selb).modelo ? ' · ' + esc(supDe(selb).modelo) : ''}` : 'ainda não lido'}</small>
+        <button class="btn ghost small" id="impSuprUm">${IC('caixa')}Ler agora</button></div></div>
+      ${!supDe(selb) ? vazioHtml('caixa', 'Ainda sem leitura', `A leitura é automática a cada ${SUP.dados ? SUP.dados.horas : 6} h; use "Ler agora" ou "Testar leitura" no cadastro do SELB.`)
+        : supDe(selb).ok ? suprimentosHtml(supDe(selb).itens) : `<p class="err">${IC('alerta')} ${esc(supDe(selb).erro)}</p>`}
+      <div id="impSupHist"></div></div>
     <div class="panel"><div class="head-row"><h2>Linha do tempo</h2><small class="muted">faixas de 15 min · ${pings.length} verificações</small></div>
       ${pings.length ? linhaDoTempo(pings, dias) + legendaStatus() : vazioHtml('grafico', 'Sem verificações no período', 'O histórico começa a partir do cadastro do IP.')}</div>
     <div class="panel"><div class="head-row"><h2>Latência (últimas 24 h)</h2><small class="muted">aproximada: o ping usa pacote mínimo, sem carimbo de tempo</small></div>
@@ -218,6 +285,54 @@ async function renderImpressora(selb) {
   el.querySelectorAll('input[name="impDias"]').forEach(rd => rd.addEventListener('change', () => { MON.diasDet = +rd.value; renderImpressora(selb); }));
   ligarPausa(el, () => renderImpressora(selb));
   ligarLatencia($('#impLat'));
+  $('#impSuprUm').addEventListener('click', async e => { e.currentTarget.disabled = true; e.currentTarget.textContent = 'Lendo…'; await lerSuprimentosAgora(selb); renderImpressora(selb); });
+  // histórico dos níveis (90 dias)
+  api(`api/suprimentos/historico?selb=${encodeURIComponent(selb)}&dias=90`).then(x => x.ok ? x.json() : null).then(h => {
+    const box = $('#impSupHist');
+    if (box && h && h.pontos.length >= 2) { box.innerHTML = graficoSuprimentos(h.pontos); ligarGraficoSup(box); }
+  }).catch(() => {});
+}
+
+// histórico dos níveis: uma linha por tinta/toner/caixa, nas cores reais, com legenda e cursor
+const COR_LINHA = { preto: '#1f2430', azul: '#0891b2', magenta: '#db2777', amarelo: '#ca8a04', caixa: '#64748b' };
+function graficoSuprimentos(pontos) {
+  const W = 900, Hh = 220, m = { l: 40, r: 12, t: 12, b: 26 };
+  const t0 = Date.parse(pontos[0].t), t1 = Math.max(Date.parse(pontos[pontos.length - 1].t), t0 + 3600000);
+  const X = t => m.l + (t - t0) / (t1 - t0) * (W - m.l - m.r), Y = v => Hh - m.b - v / 100 * (Hh - m.t - m.b);
+  const series = {};
+  for (const p of pontos) for (const [item, pct] of p.itens) if (item !== 'outro' && pct != null) (series[item] = series[item] || []).push([Date.parse(p.t), pct]);
+  const chaves = ['preto', 'azul', 'magenta', 'amarelo', 'caixa'].filter(k => series[k]);
+  if (!chaves.length) return '';
+  const grade = [0, 50, 100].map(v => `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" class="g"/><text x="${m.l - 6}" y="${Y(v) + 4}" text-anchor="end">${v}%</text>`).join('');
+  const dias = Math.max(1, Math.round((t1 - t0) / 86400000));
+  // período curto (< 2 dias): mostra a hora; senão, o dia
+  const rot = t => { const d = new Date(t); return t1 - t0 < 2 * 86400000 ? hora(d.toISOString()) : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const marcas = [0, 0.5, 1].map(f => { const t = t0 + f * (t1 - t0); return `<text x="${X(t)}" y="${Hh - 6}" text-anchor="${f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}">${rot(t)}</text>`; }).join('');
+  const linhas = chaves.map(k => `<path d="${series[k].map(([t, v], j) => `${j ? 'L' : 'M'}${X(t).toFixed(1)},${Y(v).toFixed(1)}`).join('')}" class="linha" style="stroke:${COR_LINHA[k]}"${k === 'caixa' ? ' stroke-dasharray="5 4"' : ''}/>`).join('');
+  return `<h3>Histórico dos níveis <small class="muted">(${dias} dia${dias > 1 ? 's' : ''})</small></h3>
+    <div class="mon-legenda">${chaves.map(k => `<span><i style="background:${COR_LINHA[k]}"></i>${SUP_NOME[k]}${k === 'caixa' ? ' (% cheia)' : ''}</span>`).join('')}</div>
+    <div class="mon-lat" data-series='${JSON.stringify(Object.fromEntries(chaves.map(k => [k, series[k]])))}' data-t0="${t0}" data-t1="${t1}">
+      <svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Histórico dos níveis de tinta, toner e caixa">${grade}${marcas}${linhas}<line class="cursor" y1="${m.t}" y2="${Hh - m.b}" x1="-10" x2="-10"/></svg>
+      <div class="mon-dica" hidden></div></div>`;
+}
+function ligarGraficoSup(box) {
+  const g = box.querySelector('.mon-lat');
+  if (!g) return;
+  const S = JSON.parse(g.dataset.series), t0 = +g.dataset.t0, t1 = +g.dataset.t1, svg = g.querySelector('svg'), cur = g.querySelector('.cursor'), dica = g.querySelector('.mon-dica');
+  const W = 900, m = { l: 40, r: 12 };
+  svg.addEventListener('mousemove', e => {
+    const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * W, t = t0 + (x - m.l) / (W - m.l - m.r) * (t1 - t0);
+    let perto = null;
+    for (const pts of Object.values(S)) for (const p of pts) if (!perto || Math.abs(p[0] - t) < Math.abs(perto - t)) perto = p[0];
+    const px = m.l + (perto - t0) / (t1 - t0) * (W - m.l - m.r);
+    cur.setAttribute('x1', px); cur.setAttribute('x2', px);
+    const d = new Date(perto);
+    dica.hidden = false;
+    dica.innerHTML = `<b>${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${hora(d.toISOString())}</b><br>` +
+      Object.entries(S).map(([k, pts]) => { const p = pts.find(q => q[0] === perto); return p ? `${SUP_NOME[k]}: ${p[1]}%` : ''; }).filter(Boolean).join('<br>');
+    dica.style.left = `${px / W * 100}%`; dica.style.top = '30%';
+  });
+  svg.addEventListener('mouseleave', () => { dica.hidden = true; cur.setAttribute('x1', -10); cur.setAttribute('x2', -10); });
 }
 
 // linha do tempo: um dia por linha, 96 faixas de 15 min
