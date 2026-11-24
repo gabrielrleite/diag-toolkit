@@ -50,8 +50,10 @@ const brother = [
   assert.strictEqual(r.serie, 'E78ABC');
   const por = Object.fromEntries(r.itens.map(i => [i.desc, i]));
   assert.deepStrictEqual([por['Black Toner Cartridge'].item, por['Black Toner Cartridge'].pct, por['Black Toner Cartridge'].estado], ['preto', 12, 'baixo']);
+  assert.strictEqual(snmp.LIMITE_BAIXO, 25);
   assert.deepStrictEqual([por['Drum Unit'].item, por['Drum Unit'].pct], ['outro', 70]);
-  assert.deepStrictEqual([por['Maintenance Box'].item, por['Maintenance Box'].pct, por['Maintenance Box'].estado, por['Maintenance Box'].receptaculo], ['caixa', 92, 'cheia', true]);
+  // caixa de manutenção lida como vida útil: 92% = quase nova
+  assert.deepStrictEqual([por['Maintenance Box'].item, por['Maintenance Box'].pct, por['Maintenance Box'].estado, por['Maintenance Box'].receptaculo], ['caixa', 92, 'ok', true]);
   // comunidade errada: sem resposta
   await assert.rejects(snmp.lerSuprimentos('127.0.0.1', 'errada', { porta: a1.address().port, timeout: 200, repeticoes: 0 }), /sem resposta/);
   a1.close();
@@ -66,5 +68,13 @@ const brother = [
   assert.strictEqual(snmp.classificar('Cartucho de tinta', 'yellow', 3, 6), 'amarelo');
   assert.strictEqual(snmp.classificar('Waste Toner Bottle', '', 4, 4), 'caixa');
   assert.strictEqual(snmp.classificar('Fuser Unit', '', 3, 15), 'outro');
+  for (const nome of ['Used Toner Bottle', 'Ink Collector Unit', 'Ink Absorber', 'Caixa de manutenção', 'Waste Ink Pad']) assert.strictEqual(snmp.classificar(nome, '', 3, 1), 'caixa', nome);
+  // código do cartucho a partir do nome
+  assert.strictEqual(snmp.codigoDe('Black Toner Cartridge TN-3472'), 'TN-3472');
+  assert.strictEqual(snmp.codigoDe('Black Cartridge HP 26A CF226A'), 'CF226A');
+  assert.strictEqual(snmp.codigoDe('Black Ink T544120'), 'T544120');
+  assert.strictEqual(snmp.codigoDe('Print Cartridge Black SP C252HA'), 'C252HA');
+  assert.strictEqual(snmp.codigoDe('Black Toner Cartridge'), '');
+  assert.strictEqual(snmp.codigoDe('Maintenance Box C9345'), 'C9345');
   console.log('snmp: ok');
 })().catch(e => { console.error(e); process.exit(1); });

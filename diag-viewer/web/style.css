@@ -743,7 +743,7 @@ td .it-obs { display: inline-block; max-width: 380px; vertical-align: bottom; }
 
 /* ---------- suprimentos (tinta/toner/caixa lidos por SNMP) */
 .sup-lista { display: flex; flex-direction: column; gap: 8px; }
-.sup-linha { display: grid; grid-template-columns: minmax(130px, 200px) 1fr minmax(150px, auto); gap: 12px; align-items: center; font-size: 13px; }
+.sup-linha { display: grid; grid-template-columns: minmax(130px, 240px) 1fr minmax(150px, auto); gap: 12px; align-items: center; font-size: 13px; }
 .sup-nome { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sup-trilho { display: block; height: 10px; border-radius: 999px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; }
 .sup-fill { display: block; height: 100%; border-radius: 999px; background: var(--muted); }
@@ -751,14 +751,17 @@ td .it-obs { display: inline-block; max-width: 380px; vertical-align: bottom; }
 .sup-fill.it-caixa { background: repeating-linear-gradient(135deg, #64748b 0 5px, #94a3b8 5px 10px); }
 :root[data-theme="dark"] .sup-fill.it-preto { background: #cbd5e1; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sup-fill.it-preto { background: #cbd5e1; } }
+.sup-cod { font-weight: 500; font-size: 11px; color: var(--muted); }
+.sup-linha.est-desconhecido .sup-trilho { background: repeating-linear-gradient(135deg, transparent 0 5px, var(--line) 5px 6px); }
+.sup-m.est-desconhecido small { color: var(--muted); }
 .sup-val { font-variant-numeric: tabular-nums; color: var(--ink-2); white-space: nowrap; }
 .it-bola.it-nd { --c: var(--line-2); }
 .sup-mini { display: grid; grid-template-columns: repeat(5, 44px); gap: 6px; }
 .sup-m { display: flex; flex-direction: column; gap: 2px; }
 .sup-m .sup-trilho { height: 7px; }
 .sup-m small { font-size: 10.5px; text-align: center; font-variant-numeric: tabular-nums; }
-.sup-m.est-baixo small, .sup-m.est-quase-cheia small { color: var(--warn); font-weight: 700; }
-.sup-m.est-vazio small, .sup-m.est-cheia small { color: var(--bad); font-weight: 700; }
+.sup-m.est-baixo small { color: var(--warn); font-weight: 700; }
+.sup-m.est-vazio small { color: var(--bad); font-weight: 700; }
 .imp-status.supr-status { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: linear-gradient(100deg, var(--warn-soft), var(--panel) 75%); }
 .imp-ic.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
 .imp-item.sup { border-color: color-mix(in srgb, var(--warn) 30%, var(--line)); flex-wrap: wrap; }

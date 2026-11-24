@@ -455,7 +455,30 @@ const RecebOCR = (() => {
   }
   const temSelb = (campo, selb) => { const k = chaveSelb(selb); return !!k && separarSelbs(campo).some(x => chaveSelb(x) === k); };
 
+  // ---------------------------------------------------------------- códigos de tinta/toner na observação do SELB
+  // "Tinta T544120 (preto), T544220 (azul) · Caixa C9345" -> { preto: 'T544120', azul: 'T544220', caixa: 'C9345' }
+  // letras+números (T544120, TN-3472, CF226A) ou só números de 5 a 8 dígitos (Ricoh 842284)
+  const COD = '[A-Z]{1,4}-?[A-Z]?\\d{2,6}[A-Z]{0,4}|\\d{5,8}[A-Z]?';
+  const RE_CODIGO = new RegExp(`\\b(?:${COD})\\b`, 'g');
+  const CORES_OBS = [['caixa', /caixa|manuten|maint|res[ií]duo|waste/], ['amarelo', /amarel|yellow/], ['magenta', /magenta/],
+    ['azul', /azul|cian|cyan/], ['preto', /preto|black|negro|\bbk\b/]];
+  function codigosObs(obs, mono = false) {
+    const out = {}, todos = [];
+    for (const seg of String(obs || '').split(/[,;·\n]|\s[-–]\s/)) {
+      const cods = (seg.toUpperCase().match(RE_CODIGO) || []).filter(c => /[A-Z]/.test(c) || c.length >= 5);
+      if (!cods.length) continue;
+      todos.push(...cods);
+      const t = normalizar(seg).toLowerCase(), cor = CORES_OBS.find(([, re]) => re.test(t));
+      if (cor && !out[cor[0]]) out[cor[0]] = cods[0];
+      // impressora preta: "toner XXX" / "tinta XXX" é o preto (o código logo depois da palavra)
+      else if (!cor && mono && !out.preto) { const m = seg.toUpperCase().match(new RegExp(`(?:TONER|TINTA|CARTUCHO|INK)\\s*:?\\s*(${COD})\\b`)); if (m) out.preto = m[1]; }
+    }
+    if (!Object.keys(out).length && todos.length === 1) out.preto = todos[0]; // impressora preta com um código só
+    return out;
+  }
+
   return {
+    codigosObs,
     normalizar, similaridade, sugerir, chaveSelb, separarSelbs, juntarSelbs, temSelb, formatoSelb, ajustarAoFormato,
     cinza, reduzir, binarizar, mascarasLinhas, detectarCantos, homografia, aplicar, cantosGirados, retificar,
     analisarGrade, celula, mascaraTinta, tinta, temConteudo, scoreLarguras, cpfValido, limparCpf, limparData, limparTexto, soDigitos,

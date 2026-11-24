@@ -16,31 +16,54 @@ const SUP = { dados: null };
 
 // ---------------------------------------------------------------- suprimentos: barras nas cores reais
 const SUP_NOME = { preto: 'Preto', azul: 'Azul', magenta: 'Magenta', amarelo: 'Amarelo', caixa: 'Caixa' };
-const SUP_ALERTA = ['baixo', 'vazio', 'quase cheia', 'cheia'];
+const SUP_ALERTA = ['baixo', 'vazio'];
+const LIMITE_SUP = 25;
+// caixa de manutenção: o nível é a vida útil (100% = nova, 0% = trocar)
 function valorSup(i) {
-  if (i.pct != null) return i.receptaculo ? `${i.pct}% cheia` : `${i.pct}%`;
-  return { tem: i.receptaculo ? 'com espaço' : 'há suprimento', desconhecido: 'não informado', 'sem limite': '—' }[i.estado] || '—';
+  if (i.pct != null) return i.item === 'caixa' ? `${i.pct}% de vida útil` : `${i.pct}%`;
+  return { tem: i.item === 'caixa' ? 'com espaço' : 'há suprimento', desconhecido: 'não informado', 'sem limite': '—' }[i.estado] || '—';
 }
+const rotuloEstado = i => i.item === 'caixa' ? (i.estado === 'vazio' ? 'trocar' : 'trocar em breve') : i.estado;
 const nomeSup = i => i.item === 'outro' ? i.desc || i.tipoTxt || 'Outro' : SUP_NOME[i.item];
+// código do cartucho: o que a impressora informa ou, na falta, o anotado na observação do SELB
+// "ref" é o SELB ou o próprio cadastro ({ obs, cor, tipo, suprimento }), p.ex. o formulário ainda não salvo
+function cadDe(ref) {
+  if (ref && typeof ref === 'object') return ref;
+  try { return ref && typeof cadSelb === 'function' ? cadSelb(ref) : null; } catch { return null; }
+}
+function codigoSup(i, ref) {
+  if (i.codigo) return { cod: i.codigo, cad: false };
+  const c = cadDe(ref);
+  const cod = c && c.obs && i.item !== 'outro' ? RecebOCR.codigosObs(c.obs, c.cor === 'pb')[i.item] : '';
+  return cod ? { cod, cad: true } : null;
+}
+const semCaixa = (itens, ref) => !itens.some(i => i.item === 'caixa') && (typeof usaCaixa !== 'function' || usaCaixa(cadDe(ref)));
 // lista completa (cadastro, detalhe): uma barra por suprimento
-function suprimentosHtml(itens) {
+function suprimentosHtml(itens, selb = '') {
   if (!itens || !itens.length) return '<p class="muted">A impressora não informou suprimentos.</p>';
   const ordem = ['preto', 'azul', 'magenta', 'amarelo', 'caixa', 'outro'];
-  return `<div class="sup-lista">${[...itens].sort((a, b) => ordem.indexOf(a.item) - ordem.indexOf(b.item)).map(i => `
+  return `<div class="sup-lista">${[...itens].sort((a, b) => ordem.indexOf(a.item) - ordem.indexOf(b.item)).map(i => {
+    const cd = codigoSup(i, selb);
+    return `
     <div class="sup-linha est-${esc(i.estado.replace(' ', '-'))}" title="${esc(i.desc)}${i.tipoTxt ? ' · ' + esc(i.tipoTxt) : ''}">
-      <span class="sup-nome"><span class="it-bola it-${i.item === 'outro' ? 'nd' : i.item}">${i.item === 'caixa' ? IC('caixa') : ''}</span>${esc(nomeSup(i))}</span>
+      <span class="sup-nome"><span class="it-bola it-${i.item === 'outro' ? 'nd' : i.item}">${i.item === 'caixa' ? IC('caixa') : ''}</span>${esc(nomeSup(i))}${cd ? ` <small class="mono sup-cod" title="${cd.cad ? 'código anotado no cadastro do SELB' : 'código informado pela impressora'}">${esc(cd.cod)}${cd.cad ? ' *' : ''}</small>` : ''}</span>
       <span class="sup-trilho"><span class="sup-fill it-${i.item}" style="width:${i.pct ?? (i.estado === 'tem' ? 100 : 0)}%"></span></span>
-      <span class="sup-val">${esc(valorSup(i))}${SUP_ALERTA.includes(i.estado) ? ` <span class="badge ${['vazio', 'cheia'].includes(i.estado) ? 'bad' : 'warn'}">${esc(i.estado)}</span>` : ''}</span>
-    </div>`).join('')}</div>`;
+      <span class="sup-val">${esc(valorSup(i))}${SUP_ALERTA.includes(i.estado) ? ` <span class="badge ${i.estado === 'vazio' ? 'bad' : 'warn'}">${esc(rotuloEstado(i))}</span>` : ''}</span>
+    </div>`;
+  }).join('')}${semCaixa(itens, selb) ? `
+    <div class="sup-linha est-desconhecido" title="A impressora não lista a caixa de manutenção entre os suprimentos (SNMP). Alguns modelos só mostram na própria tela ou na interface web.">
+      <span class="sup-nome"><span class="it-bola it-caixa">${IC('caixa')}</span>Caixa</span>
+      <span class="sup-trilho"></span><span class="sup-val muted">não informada pela impressora</span></div>` : ''}</div>
+    ${itens.some(i => codigoSup(i, selb)?.cad) ? '<p class="muted"><small>* código anotado na observação do SELB (a impressora não informou).</small></p>' : ''}`;
 }
 // versão compacta (tabela de impressoras): só tintas/toners e caixa
-function suprimentosMini(s) {
+function suprimentosMini(s, selb = '') {
   if (!s) return '<span class="muted">—</span>';
   if (!s.ok) return `<span class="badge" title="${esc(s.erro || '')}">sem leitura</span>`;
   const it = s.itens.filter(i => i.item !== 'outro');
   if (!it.length) return '<span class="muted">—</span>';
-  return `<div class="sup-mini">${it.map(i => `<span class="sup-m est-${esc(i.estado.replace(' ', '-'))}" title="${esc(nomeSup(i))}: ${esc(valorSup(i))}">
-    <span class="sup-trilho"><span class="sup-fill it-${i.item}" style="width:${i.pct ?? (i.estado === 'tem' ? 100 : 0)}%"></span></span><small>${i.pct != null ? i.pct + '%' : '·'}</small></span>`).join('')}</div>`;
+  return `<div class="sup-mini">${it.map(i => { const cd = codigoSup(i, selb); return `<span class="sup-m est-${esc(i.estado.replace(' ', '-'))}" title="${esc(nomeSup(i))}${cd ? ' ' + esc(cd.cod) : ''}: ${esc(valorSup(i))}">
+    <span class="sup-trilho"><span class="sup-fill it-${i.item}" style="width:${i.pct ?? (i.estado === 'tem' ? 100 : 0)}%"></span></span><small>${i.pct != null ? i.pct + '%' : '·'}</small></span>`; }).join('')}${semCaixa(it, selb) ? '<span class="sup-m est-desconhecido" title="Caixa de manutenção: não informada pela impressora"><span class="sup-trilho"></span><small>cx ?</small></span>' : ''}</div>`;
 }
 const supDe = selb => SUP.dados && SUP.dados.selbs[RecebOCR.chaveSelb(selb)];
 const alertasSup = s => s && s.ok ? s.itens.filter(i => i.item !== 'outro' && SUP_ALERTA.includes(i.estado)) : [];
@@ -152,21 +175,21 @@ function desenharMonitor() {
   desenharSuprStatus();
 }
 
-// tela inicial: tinta/toner baixo ou caixa de manutenção quase cheia
+// tela inicial: tinta/toner ou vida útil da caixa de manutenção baixa
 function desenharSuprStatus() {
   const box = document.getElementById('suprStatus');
   if (!box) return;
   const imps = (MON.dados && !MON.dados.pausa ? MON.dados.impressoras : []).filter(i => !i.pausada);
   const com = imps.map(i => ({ i, a: alertasSup(supDe(i.selb)) })).filter(x => x.a.length)
-    .sort((x, y) => Math.min(...x.a.map(z => z.receptaculo ? 100 - (z.pct ?? 0) : z.pct ?? 0)) - Math.min(...y.a.map(z => z.receptaculo ? 100 - (z.pct ?? 0) : z.pct ?? 0)));
+    .sort((x, y) => Math.min(...x.a.map(z => z.pct ?? 0)) - Math.min(...y.a.map(z => z.pct ?? 0)));
   if (!com.length) { box.hidden = true; return; }
   box.hidden = false;
   box.innerHTML = `<div class="imp-linha"><span class="imp-ic warn">${IC('caixa')}</span>
-    <div><b>${com.length === 1 ? '1 impressora com suprimento baixo' : `${com.length} impressoras com suprimento baixo`}</b><br><small>Tinta/toner até 15% ou caixa de manutenção a partir de 75% · leitura a cada ${SUP.dados.horas} h${SUP.dados.rodada ? `, última ${haQuanto(SUP.dados.rodada)}` : ''}</small></div>
+    <div><b>${com.length === 1 ? '1 impressora com suprimento baixo' : `${com.length} impressoras com suprimento baixo`}</b><br><small>Tinta/toner ou vida útil da caixa de manutenção com ${LIMITE_SUP}% ou menos · leitura a cada ${SUP.dados.horas} h${SUP.dados.rodada ? `, última ${haQuanto(SUP.dados.rodada)}` : ''}</small></div>
     <div class="imp-acoes"><a class="btn ghost small" href="#receb/impressoras">${IC('grafico')}Ver impressoras</a></div></div>
     <div class="imp-lista">${com.map(({ i, a }) => `<div class="imp-item sup">
       <div><b>${esc(i.selb)}</b> <span class="muted">${esc(nomeImp(i))}</span>${i.local ? `<br><small>${esc(i.local)}</small>` : ''}</div>
-      <div class="sup-tags">${a.map(z => `<span class="sup-tag ${['vazio', 'cheia'].includes(z.estado) ? 'bad' : 'warn'}"><span class="it-bola it-${z.item}">${z.item === 'caixa' ? IC('caixa') : ''}</span>${esc(SUP_NOME[z.item])} ${esc(valorSup(z))}</span>`).join('')}</div></div>`).join('')}</div>`;
+      <div class="sup-tags">${a.map(z => `<span class="sup-tag ${z.estado === 'vazio' ? 'bad' : 'warn'}"><span class="it-bola it-${z.item}">${z.item === 'caixa' ? IC('caixa') : ''}</span>${esc(SUP_NOME[z.item])} ${esc(valorSup(z))}</span>`).join('')}</div></div>`).join('')}</div>`;
 }
 
 // ================================================================== Recebimentos › Impressoras
@@ -190,6 +213,8 @@ async function renderImpressoras(arg = '') {
   const D = MON.dados;
   const rq = await api('api/monitor/quedas?dias=30').catch(() => null);
   const quedas = rq && rq.ok ? (await rq.json()).quedas : [];
+  const ra = await api('api/monitor/alertas?dias=30').catch(() => null);
+  const AL = ra && ra.ok ? await ra.json() : { alertas: [], webhook: false };
   if (!D) { el.innerHTML = abasReceb('impressoras') + '<div class="panel"><p class="err">Não foi possível carregar o monitoramento.</p></div>'; return; }
   const imps = [...D.impressoras].sort((a, b) => (a.online === false && !a.pausada ? 0 : 1) - (b.online === false && !b.pausada ? 0 : 1) || a.selb.localeCompare(b.selb, 'pt-BR', { numeric: true }));
   const ativas = imps.filter(i => !i.pausada);
@@ -218,10 +243,21 @@ async function renderImpressoras(arg = '') {
         <td>${i.pausada || D.pausa ? `<span class="badge">pausada ${esc(ateTxt(i.pausada || D.pausa))}</span>`
           : i.online === null ? '<span class="badge">aguardando</span>' : i.online ? `<span class="badge ok">online</span><br><small>${i.ms != null ? `~${i.ms} ms · ` : ''}${haQuanto(i.verificadoEm)}</small>`
           : `<span class="badge bad">fora do ar</span><br><small>${haQuanto(i.desde)}</small>`}</td>
-        <td>${suprimentosMini(supDe(i.selb))}</td>
+        <td>${suprimentosMini(supDe(i.selb), i.selb)}</td>
         <td>${barra24h(i.faixas)}</td>
         <td class="t">${pctTxt(i.d24)}</td><td class="t">${pctTxt(i.d7)}</td><td>${i.quedas7 || 0}</td>
         <td class="acoes">${i.pausada ? `<button class="btn ghost small" data-retomar="${esc(i.selb)}">Retomar</button>` : menuPausa(i.selb)}</td></tr>`).join('')}
+      </tbody></table></div>`}
+    </div>
+    <div class="panel">
+      <div class="head-row"><h2>Alertas (30 dias)</h2><div class="filters" style="margin:0">
+        ${AL.webhook ? '<span class="badge ok">envio por webhook ativo</span>' : '<span class="badge" title="Defina ALERTA_WEBHOOK na stack para receber os alertas no Teams, Google Chat, Discord ou ntfy">sem envio externo</span>'}
+        ${AL.webhook ? `<button class="btn ghost small" id="impAlertaTeste">${IC('raio')}Enviar alerta de teste</button>` : ''}</div></div>
+      <p class="muted">Gerado quando tinta/toner ou a vida útil da caixa de manutenção chega a ${LIMITE_SUP}% (e de novo ao chegar a 5%), e quando uma impressora cai ou volta.</p>
+      ${!AL.alertas.length ? vazioHtml('check', 'Nenhum alerta nos últimos 30 dias', '') : `
+      <div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Quando</th><th class="nosort">Alerta</th><th class="nosort">Enviado</th></tr></thead><tbody>
+      ${AL.alertas.slice(0, 200).map(a => `<tr data-imp="${esc(String(a.selb || '').split(', ')[0])}"><td class="t">${dataHora(a.quando)}</td><td>${esc(a.texto)}</td>
+        <td>${!AL.webhook && !a.enviado ? '<span class="muted">—</span>' : a.enviado ? '<span class="badge ok">sim</span>' : '<span class="badge bad">falhou</span>'}</td></tr>`).join('')}
       </tbody></table></div>`}
     </div>
     <div class="panel">
@@ -239,6 +275,13 @@ async function renderImpressoras(arg = '') {
   }));
   $('#impVerificar').addEventListener('click', async e => { e.target.disabled = true; e.target.textContent = 'Verificando…'; await atualizarMonitor(true); renderImpressoras(); });
   $('#impSupr').addEventListener('click', async e => { e.currentTarget.disabled = true; e.currentTarget.textContent = 'Lendo…'; await lerSuprimentosAgora(); renderImpressoras(); });
+  $('#impAlertaTeste')?.addEventListener('click', async e => {
+    const b = e.currentTarget; b.disabled = true;
+    const r = await api('api/monitor/alerta-teste', { method: 'POST' }).catch(() => null);
+    const j = r ? await r.json().catch(() => ({})) : {};
+    alert(r && r.ok && j.enviado ? 'Alerta de teste enviado.' : `Não foi possível enviar: ${j.erro || (j.status ? 'HTTP ' + j.status : 'sem resposta do webhook')}`);
+    b.disabled = false;
+  });
   ligarPausa(el, () => renderImpressoras());
 }
 
@@ -272,7 +315,7 @@ async function renderImpressora(selb) {
         <small class="muted">${supDe(selb) ? `lido ${haQuanto(supDe(selb).lidoEm)}${supDe(selb).modelo ? ' · ' + esc(supDe(selb).modelo) : ''}` : 'ainda não lido'}</small>
         <button class="btn ghost small" id="impSuprUm">${IC('caixa')}Ler agora</button></div></div>
       ${!supDe(selb) ? vazioHtml('caixa', 'Ainda sem leitura', `A leitura é automática a cada ${SUP.dados ? SUP.dados.horas : 6} h; use "Ler agora" ou "Testar leitura" no cadastro do SELB.`)
-        : supDe(selb).ok ? suprimentosHtml(supDe(selb).itens) : `<p class="err">${IC('alerta')} ${esc(supDe(selb).erro)}</p>`}
+        : supDe(selb).ok ? suprimentosHtml(supDe(selb).itens, selb) : `<p class="err">${IC('alerta')} ${esc(supDe(selb).erro)}</p>`}
       <div id="impSupHist"></div></div>
     <div class="panel"><div class="head-row"><h2>Linha do tempo</h2><small class="muted">faixas de 15 min · ${pings.length} verificações</small></div>
       ${pings.length ? linhaDoTempo(pings, dias) + legendaStatus() : vazioHtml('grafico', 'Sem verificações no período', 'O histórico começa a partir do cadastro do IP.')}</div>
@@ -310,7 +353,7 @@ function graficoSuprimentos(pontos) {
   const marcas = [0, 0.5, 1].map(f => { const t = t0 + f * (t1 - t0); return `<text x="${X(t)}" y="${Hh - 6}" text-anchor="${f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}">${rot(t)}</text>`; }).join('');
   const linhas = chaves.map(k => `<path d="${series[k].map(([t, v], j) => `${j ? 'L' : 'M'}${X(t).toFixed(1)},${Y(v).toFixed(1)}`).join('')}" class="linha" style="stroke:${COR_LINHA[k]}"${k === 'caixa' ? ' stroke-dasharray="5 4"' : ''}/>`).join('');
   return `<h3>Histórico dos níveis <small class="muted">(${dias} dia${dias > 1 ? 's' : ''})</small></h3>
-    <div class="mon-legenda">${chaves.map(k => `<span><i style="background:${COR_LINHA[k]}"></i>${SUP_NOME[k]}${k === 'caixa' ? ' (% cheia)' : ''}</span>`).join('')}</div>
+    <div class="mon-legenda">${chaves.map(k => `<span><i style="background:${COR_LINHA[k]}"></i>${SUP_NOME[k]}${k === 'caixa' ? ' (% vida útil)' : ''}</span>`).join('')}</div>
     <div class="mon-lat" data-series='${JSON.stringify(Object.fromEntries(chaves.map(k => [k, series[k]])))}' data-t0="${t0}" data-t1="${t1}">
       <svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Histórico dos níveis de tinta, toner e caixa">${grade}${marcas}${linhas}<line class="cursor" y1="${m.t}" y2="${Hh - m.b}" x1="-10" x2="-10"/></svg>
       <div class="mon-dica" hidden></div></div>`;

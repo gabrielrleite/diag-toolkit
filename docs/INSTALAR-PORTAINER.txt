@@ -93,6 +93,19 @@ TINTA / TONER / CAIXA DE MANUTENÇÃO PELA REDE (SNMP):
       Ricoh:   Web Image Monitor > Configuration > Network > SNMP.
   - Tanque de tinta (EcoTank etc.) não mede o nível de verdade: aparece
     como estimado ou "não informado".
+  - A caixa de manutenção aparece como vida útil (100% = nova). Se o
+    modelo não a informa por SNMP, aparece "não informada pela impressora".
+  - Código do cartucho: vem da impressora; se ela não informar, use a
+    observação do SELB, ex.: "T544120 (preto), T544220 (azul) · Caixa C9345".
+
+ALERTAS (tinta/toner/caixa com 25% ou menos, impressora caiu/voltou):
+  Sempre ficam em Recebimentos > Impressoras > Alertas. Para receber
+  também fora do sistema, crie em Environment variables da stack:
+      ALERTA_WEBHOOK = URL do webhook
+  Funciona com webhook de entrada do Microsoft Teams (Workflows), Google
+  Chat, Discord, Slack ou um tópico do ntfy.sh (ex.: https://ntfy.sh/
+  nome-dificil-de-adivinhar, e instale o app ntfy no celular). Depois
+  de "Update the stack", use "Enviar alerta de teste" na aba Impressoras.
 
 MODO TREINAMENTO (Recebimentos > Treinamento):
   Ligado por padrão. Cada linha CONFERIDA guarda o que o OCR leu em Local,

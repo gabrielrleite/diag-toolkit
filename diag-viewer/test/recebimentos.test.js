@@ -83,3 +83,14 @@ assert.strictEqual(O.ajustarAoFormato('AG691', fmt), 'A6691');
 assert.strictEqual(O.ajustarAoFormato('8123', fmt), '8123');          // tamanho diferente: não mexe
 assert.strictEqual(O.formatoSelb(['A1', 'B22']), null);                // poucos exemplos
 console.log('recebimentos (datas e formato de SELB): ok');
+
+// códigos de tinta/toner na observação do cadastro do SELB
+assert.deepStrictEqual(O.codigosObs('Tinta T544120 (preto), T544220 (azul), T544320 (magenta), T544420 (amarelo) · Caixa C9345'),
+  { preto: 'T544120', azul: 'T544220', magenta: 'T544320', amarelo: 'T544420', caixa: 'C9345' });
+assert.deepStrictEqual(O.codigosObs('Toner CF258A'), { preto: 'CF258A' });
+assert.deepStrictEqual(O.codigosObs('Toner TN-3472 / cilindro DR-3440', true), { preto: 'TN-3472' });
+assert.deepStrictEqual(O.codigosObs('Toner TN-3472 / cilindro DR-3440', false), {});
+assert.deepStrictEqual(O.codigosObs(''), {});
+assert.deepStrictEqual(O.codigosObs('Toner 842284 preto, 842287 ciano, 842286 magenta, 842285 amarelo; frasco de resíduo 416890'), { preto: '842284', azul: '842287', magenta: '842286', amarelo: '842285', caixa: '416890' });
+assert.deepStrictEqual(O.codigosObs('trocar em 12/2025, ramal 2034'), {});
+console.log('recebimentos (códigos na observação): ok');
