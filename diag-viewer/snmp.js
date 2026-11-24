@@ -142,13 +142,20 @@ const texto = v => Buffer.isBuffer(v) ? v.toString('utf8').replace(/\u0000+$/g, 
 // item da Central diag: preto/azul/magenta/amarelo (tinta ou toner), caixa (manutenção/resíduo) ou outro (drum, fusor...)
 function classificar(desc, corante, classe, tipo) {
   const d = `${desc} ${corante}`.toLowerCase();
-  if (classe === 4 || tipo === 4 || tipo === 8 || /waste|res[ií]duo|maintenance|manuten|caixa/.test(d)) return 'caixa';
+  // caixa de manutenção / recipiente de resíduo: nomes variam por fabricante e idioma
+  if (classe === 4 || tipo === 4 || tipo === 8 || /waste|res[ií]duo|maint|manuten|caixa|collect|absorb|used toner|toner usado|recipiente|bo[iî]te de maint|\bpad\b|almofada/.test(d)) return 'caixa';
   if (![3, 5, 6, 21, 1, 2].includes(tipo) && !/toner|ink|tinta|cartu/.test(d)) return 'outro';
   if (/yellow|amarel|\by\b/.test(d)) return 'amarelo';
   if (/magenta|\bm\b/.test(d)) return 'magenta';
   if (/cyan|ciano|\bc\b/.test(d)) return 'azul';
   if (/black|preto|negro|\bbk\b|\bk\b|mono/.test(d)) return 'preto';
   return 'outro';
+}
+const LIMITE_BAIXO = 25; // % (tinta/toner e vida útil da caixa)
+// código do cartucho/toner quando vem no nome (ex.: "Black Toner Cartridge TN-3472", "HP 26A CF226A", "T544120")
+function codigoDe(desc) {
+  const cands = String(desc || '').toUpperCase().match(/\b[A-Z]{1,4}-?[A-Z]?\d{2,6}[A-Z]{0,4}\b/g) || [];
+  return cands.find(c => /\d/.test(c) && /[A-Z]/.test(c) && c.replace(/\D/g, '').length >= 2) || '';
 }
 async function lerSuprimentos(ip, comunidade = 'public', opc = {}) {
   const t0 = Date.now();
@@ -170,10 +177,11 @@ async function lerSuprimentos(ip, comunidade = 'public', opc = {}) {
     else if (nv === -3) estado = 'tem'; // "há suprimento", sem quantidade
     else if (nv === -2 || mx === -2) estado = 'desconhecido';
     else if (nv === -1) estado = 'sem limite';
-    // receptáculo (caixa de manutenção/resíduo): o nível é o quanto JÁ ENCHEU (RFC 3805)
+    // todo suprimento é lido como o que RESTA (a caixa de manutenção como vida útil: 100% = nova), como as
+    // impressoras deste parque informam. Alerta em 25% ou menos; 5% ou menos = vazio/trocar.
     const receptaculo = cl === 4;
-    if (pct != null) estado = receptaculo ? (pct >= 90 ? 'cheia' : pct >= 75 ? 'quase cheia' : 'ok') : (pct <= 5 ? 'vazio' : pct <= 15 ? 'baixo' : 'ok');
-    return { idx: k, desc: ds, cor, item, classe: cl, tipo: tp, tipoTxt: TIPO_TXT[tp] || '', max: mx, nivel: nv, pct, receptaculo, estado };
+    if (pct != null) estado = pct <= 5 ? 'vazio' : pct <= LIMITE_BAIXO ? 'baixo' : 'ok';
+    return { idx: k, desc: ds, cor, item, codigo: codigoDe(ds), classe: cl, tipo: tp, tipoTxt: TIPO_TXT[tp] || '', max: mx, nivel: nv, pct, receptaculo, estado };
   });
   return {
     ok: true, versao, ms: Date.now() - t0, lidoEm: new Date().toISOString(),
@@ -182,4 +190,4 @@ async function lerSuprimentos(ip, comunidade = 'public', opc = {}) {
   };
 }
 
-module.exports = { percorrer, lerSuprimentos, classificar, _ber: { mensagem, decodificar, oid, int, tlv, seq } };
+module.exports = { percorrer, lerSuprimentos, classificar, codigoDe, LIMITE_BAIXO, _ber: { mensagem, decodificar, oid, int, tlv, seq } };

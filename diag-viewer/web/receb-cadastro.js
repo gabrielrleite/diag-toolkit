@@ -15,7 +15,7 @@ const kSelb = t => RecebOCR.normalizar(t).replace(/ /g, '');
 
 function abasReceb(on) {
   const a = (k, rot, href) => `<a href="${href}" class="${on === k ? 'on' : ''}">${rot}</a>`;
-  return `<nav class="rb-abas">${a('entregas', 'Entregas', '#receb')}${a('locais', 'Locais', '#receb/locais')}${a('selbs', 'SELBs', '#receb/selbs')}${a('impressoras', 'Impressoras', '#receb/impressoras')}${a('treino', 'Treinamento', '#receb/treino')}</nav>`;
+  return `<nav class="rb-abas">${a('entregas', 'Entregas', '#receb')}${a('locais', 'Locais', '#receb/locais')}${a('selbs', 'SELBs', '#receb/selbs')}${a('impressoras', 'Impressoras', '#receb/impressoras')}${a('suprimentos', 'Suprimentos', '#receb/suprimentos')}${a('treino', 'Treinamento', '#receb/treino')}</nav>`;
 }
 
 async function carregarLocais() {
@@ -354,7 +354,7 @@ function ligarFormSelb(c) {
       .then(x => x.json()).catch(() => ({ ok: false, erro: 'servidor indisponível' }));
     $('#sfTestar').disabled = false;
     box.innerHTML = r.ok
-      ? `<div class="sf-snmp-cab"><span class="badge ok">leitura ok</span> <b>${esc(r.modelo || 'modelo não informado')}</b>${r.serie ? ` <small class="mono">série ${esc(r.serie)}</small>` : ''} <small class="muted">SNMP ${esc(r.versao)} · ${r.ms} ms</small></div>${suprimentosHtml(r.itens)}`
+      ? `<div class="sf-snmp-cab"><span class="badge ok">leitura ok</span> <b>${esc(r.modelo || 'modelo não informado')}</b>${r.serie ? ` <small class="mono">série ${esc(r.serie)}</small>` : ''} <small class="muted">SNMP ${esc(r.versao)} · ${r.ms} ms</small></div>${suprimentosHtml(r.itens, { tipo: $('#sfTipo').value, obs: $('#sfObs').value, cor: (f.querySelector('input[name="sfCor"]:checked') || {}).value, suprimento: (f.querySelector('input[name="sfSup"]:checked') || {}).value })}`
       : `<p class="err">${IC('alerta')} Não foi possível ler: ${esc(r.erro || 'erro')}</p>${r.sysDescr ? `<p class="muted">O equipamento respondeu: ${esc(r.sysDescr)}</p>` : ''}`;
   });
   $('#sfSalvar').addEventListener('click', async e => {

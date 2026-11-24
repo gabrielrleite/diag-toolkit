@@ -47,6 +47,9 @@ const READ_TOKEN = process.env.READ_TOKEN || '';
 const MAX_BYTES = (+process.env.MAX_MB || 500) * 1048576;
 const OCR_URL = (process.env.OCR_URL || '').replace(/\/$/, ''); // serviço diag-ocr (ex.: http://ocr:8000)
 const MONITOR_MIN = Math.max(1, +process.env.MONITOR_MIN || 5); // intervalo do ping das impressoras (minutos)
+// alertas (queda/retorno de impressora, suprimento abaixo de 25%) enviados por POST JSON a este endereço:
+// Teams/Google Chat/Slack (campo "text"), Discord ("content") ou ntfy. Vazio = só na tela.
+const ALERTA_WEBHOOK = (process.env.ALERTA_WEBHOOK || '').trim();
 const DIR = path.join(DATA, 'coletas');
 const ID_RE = /^\d{8}T\d{6}Z-[0-9a-f]{6}$/;
 const AID_RE = /^[0-9a-f]{12}$/;
@@ -780,6 +783,46 @@ async function registrarQuedas(mudancas) {
   });
 }
 
+// ---- alertas: registro (monitor/alertas.json, últimos 2000) e envio opcional por webhook
+const ALERTAS_FILE = path.join(MON_DIR, 'alertas.json');
+async function lerAlertas() { try { return JSON.parse(await fsp.readFile(ALERTAS_FILE, 'utf8')); } catch { return []; } }
+async function enviarWebhook(texto, dados) {
+  if (!ALERTA_WEBHOOK) return { enviado: false };
+  try {
+    const ntfy = /ntfy/i.test(ALERTA_WEBHOOK);
+    const r = await fetch(ALERTA_WEBHOOK, {
+      method: 'POST', signal: AbortSignal.timeout(8000),
+      headers: { 'Content-Type': ntfy ? 'text/plain; charset=utf-8' : 'application/json', ...(ntfy ? { Title: 'Central diag' } : {}) },
+      body: ntfy ? texto : JSON.stringify({ text: texto, content: texto, origem: 'Central diag', ...dados }),
+    });
+    return { enviado: r.ok, status: r.status };
+  } catch (e) { console.error('webhook:', e.message); return { enviado: false, erro: e.message }; }
+}
+async function registrarAlerta(a) {
+  const al = { id: crypto.randomBytes(4).toString('hex'), quando: new Date().toISOString(), ...a };
+  const envio = await enviarWebhook(al.texto, { evento: al.tipo, selb: al.selb, item: al.item, pct: al.pct, ip: al.ip });
+  al.enviado = envio.enviado;
+  await withLock('monitor-alertas', async () => {
+    const lista = await lerAlertas(); lista.push(al);
+    await writeJsonAtomic(ALERTAS_FILE, lista.slice(-2000));
+  });
+  await audit({ acao: 'alerta_' + al.tipo, selb: al.selb, item: al.item, pct: al.pct, enviado: al.enviado });
+  return al;
+}
+// local de cada SELB: o da última entrega registrada
+async function ultimosLocais() {
+  const m = new Map();
+  for (const f of await listFolhas(true)) for (const l of f.linhas) {
+    if (!l.local) continue;
+    for (const sel of RecebOCR.separarSelbs(l.selb)) {
+      const k = chaveSelbRec(sel), q = l.dataIso || (f.criadoEm || '').slice(0, 10), u = m.get(k);
+      if (!u || q >= u.q) m.set(k, { local: l.local, q });
+    }
+  }
+  return m;
+}
+const descImp = (c, local) => [c.selb, [c.marca, c.modelo].filter(Boolean).join(' '), local].filter(Boolean).join(' · ');
+
 async function rodadaMonitor({ forcar = false } = {}) {
   if (monitorRodando) return monitorRodando;
   monitorRodando = (async () => {
@@ -804,6 +847,9 @@ async function rodadaMonitor({ forcar = false } = {}) {
           mudancas.push({ ip, selb: sel, online: r.online, quando });
           await audit({ acao: r.online ? 'impressora_voltou' : 'impressora_caiu', ip, selb: sel });
           console.log(`[monitor] ${sel} (${ip}) ${r.online ? 'voltou' : 'FORA DO AR'}`);
+          const c0 = cads.find(c => c.ip === ip), loc = c0 ? ((await ultimosLocais()).get(chaveSelbRec(c0.selb)) || {}).local : '';
+          await registrarAlerta({ tipo: r.online ? 'retorno' : 'queda', selb: sel, ip,
+            texto: r.online ? `✅ Impressora voltou: ${descImp({ ...c0, selb: sel }, loc)} (${ip})` : `🔴 Impressora fora do ar: ${descImp({ ...c0, selb: sel }, loc)} (${ip})` });
         }
       }
     };
@@ -900,6 +946,14 @@ async function monitorRoute(req, res, url, acao) {
     const pings = (await lerPings(dias, o => temSelbNoPing(o, selb))).map(o => ({ t: o.t, on: o.on, ms: o.ms, v: o.v }));
     const quedas = (await lerQuedas()).filter(q => String(q.selb).split(', ').some(x => chaveSelbRec(x) === chaveSelbRec(selb)) && (!q.fim || Date.now() - Date.parse(q.inicio) <= dias * 86400000));
     return json(res, 200, { selb, dias, intervaloMin: MONITOR_MIN, pings, quedas: quedas.reverse() });
+  } else if (acao === 'alertas') {
+    const dias = Math.max(1, Math.min(400, +url.searchParams.get('dias') || 30)), desde = Date.now() - dias * 86400000;
+    return json(res, 200, { dias, webhook: !!ALERTA_WEBHOOK, alertas: (await lerAlertas()).filter(a => Date.parse(a.quando) >= desde).reverse() });
+  } else if (acao === 'alerta-teste') {
+    if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+    req.resume();
+    if (!ALERTA_WEBHOOK) return json(res, 400, { erro: 'ALERTA_WEBHOOK não configurado no servidor.' });
+    return json(res, 200, await enviarWebhook('🔔 Teste de alerta da Central diag: o envio está funcionando.', { evento: 'teste' }));
   } else if (acao === 'quedas') {
     const dias = Math.max(1, Math.min(400, +url.searchParams.get('dias') || 30));
     const quedas = (await lerQuedas()).filter(q => !q.fim || Date.now() - Date.parse(q.inicio) <= dias * 86400000).reverse();
@@ -923,7 +977,7 @@ async function monitorRoute(req, res, url, acao) {
       pausada: p ? { ate: p.ate, em: p.em, motivo: p.motivo } : null,
       d24: r.d24 ?? null, d7: r.d7 ?? null, faixas: r.faixas || Array(48).fill(null), quedas7: r.quedas7 || 0 };
   });
-  json(res, 200, { intervaloMin: MONITOR_MIN, dias: MONITOR_DIAS, rodada: monitor.rodada, ping: monitor.ping, verificando: !!monitorRodando,
+  json(res, 200, { intervaloMin: MONITOR_MIN, dias: MONITOR_DIAS, webhook: !!ALERTA_WEBHOOK, rodada: monitor.rodada, ping: monitor.ping, verificando: !!monitorRodando,
     pausa: monitor.pausa.geral, impressoras });
 }
 setTimeout(() => rodadaMonitor().catch(e => console.error('monitor:', e.message)), 15000).unref();
@@ -965,7 +1019,9 @@ async function rodadaSuprimentos({ selb = '', forcar = false } = {}) {
     const trabalhar = async () => {
       while (fila.length) {
         const c = fila.shift(), r = await lerUma(c);
+        const ant = supr.selbs[chaveSelbRec(c.selb)];
         supr.selbs[chaveSelbRec(c.selb)] = { selb: c.selb, ...r };
+        if (r.ok) await alertasSuprimento(c, ant, r);
         if (r.ok) linhas.push(JSON.stringify({ t: r.lidoEm, s: c.selb, i: r.itens.map(i => [i.item, i.pct, i.estado, i.desc]) }));
       }
     };
@@ -978,6 +1034,26 @@ async function rodadaSuprimentos({ selb = '', forcar = false } = {}) {
     await writeJsonAtomic(SUPR_FILE, supr).catch(e => console.error('suprimentos:', e.message));
   })().finally(() => { suprRodando = null; });
   return suprRodando;
+}
+// alerta quando tinta/toner/caixa cruza 25% (baixo) ou 5% (vazio) — uma vez por cruzamento
+const NOME_ITEM = { preto: 'preto', azul: 'azul', magenta: 'magenta', amarelo: 'amarelo' };
+async function alertasSuprimento(c, ant, r) {
+  const grav = { ok: 0, baixo: 1, vazio: 2 };
+  const antes = new Map(((ant && ant.ok && ant.itens) || []).map(i => [i.item + '|' + i.idx, i]));
+  const cods = RecebOCR.codigosObs(c.obs, c.cor === 'pb');
+  let local = null;
+  for (const i of r.itens) {
+    if (i.item === 'outro' || !['baixo', 'vazio'].includes(i.estado)) continue;
+    const a = antes.get(i.item + '|' + i.idx);
+    if (a && (grav[a.estado] ?? 0) >= grav[i.estado]) continue; // já estava assim (ou pior)
+    if (local === null) local = ((await ultimosLocais()).get(chaveSelbRec(c.selb)) || {}).local || '';
+    const toner = c.suprimento === 'toner' || /toner/i.test(i.desc + i.tipoTxt);
+    const nome = i.item === 'caixa' ? 'Caixa de manutenção' : `${toner ? 'Toner' : 'Tinta'} ${NOME_ITEM[i.item]}`;
+    const codigo = i.codigo || cods[i.item] || '';
+    const quanto = i.item === 'caixa' ? `${i.pct}% de vida útil` : `${i.pct}%`;
+    await registrarAlerta({ tipo: 'suprimento', selb: c.selb, ip: c.ip, item: i.item, pct: i.pct, estado: i.estado, codigo,
+      texto: `${i.estado === 'vazio' ? '🔴' : '🟡'} ${nome} ${i.estado === 'vazio' ? (i.item === 'caixa' ? 'precisa ser trocada' : 'acabando') : (i.item === 'caixa' ? 'perto do fim' : toner ? 'baixo' : 'baixa')}: ${quanto} — ${descImp(c, local)}${codigo ? ` · código ${codigo}` : ''}` });
+  }
 }
 async function limparHistoricoSuprimentos() {
   const limite = new Date(Date.now() - SUPR_DIAS * 86400000).toISOString().slice(0, 7);
@@ -1703,7 +1779,7 @@ const server = http.createServer(async (req, res) => {
     if (tr) return await treinoRoute(req, res, url, tr[1]);
     const su = p.match(/^\/api\/suprimentos(?:\/(ler|testar|historico))?$/);
     if (su) return await suprimentosRoute(req, res, url, su[1]);
-    const mo = p.match(/^\/api\/monitor(?:\/(verificar|pausa|historico|quedas))?$/);
+    const mo = p.match(/^\/api\/monitor(?:\/(verificar|pausa|historico|quedas|alertas|alerta-teste))?$/);
     if (mo) return await monitorRoute(req, res, url, mo[1]);
     const sc = p.match(/^\/api\/receb-selbs(?:\/([^/]+))?$/);
     if (sc) return await selbsRoute(req, res, url, sc[1]);
