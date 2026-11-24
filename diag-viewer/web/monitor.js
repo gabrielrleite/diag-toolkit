@@ -186,10 +186,111 @@ function desenharSuprStatus() {
   box.hidden = false;
   box.innerHTML = `<div class="imp-linha"><span class="imp-ic warn">${IC('caixa')}</span>
     <div><b>${com.length === 1 ? '1 impressora com suprimento baixo' : `${com.length} impressoras com suprimento baixo`}</b><br><small>Tinta/toner ou vida útil da caixa de manutenção com ${LIMITE_SUP}% ou menos · leitura a cada ${SUP.dados.horas} h${SUP.dados.rodada ? `, última ${haQuanto(SUP.dados.rodada)}` : ''}</small></div>
-    <div class="imp-acoes"><a class="btn ghost small" href="#receb/impressoras">${IC('grafico')}Ver impressoras</a></div></div>
+    <div class="imp-acoes"><a class="btn ghost small" href="#receb/suprimentos">${IC('caixa')}Ver suprimentos</a></div></div>
     <div class="imp-lista">${com.map(({ i, a }) => `<div class="imp-item sup">
       <div><b>${esc(i.selb)}</b> <span class="muted">${esc(nomeImp(i))}</span>${i.local ? `<br><small>${esc(i.local)}</small>` : ''}</div>
       <div class="sup-tags">${a.map(z => `<span class="sup-tag ${z.estado === 'vazio' ? 'bad' : 'warn'}"><span class="it-bola it-${z.item}">${z.item === 'caixa' ? IC('caixa') : ''}</span>${esc(SUP_NOME[z.item])} ${esc(valorSup(z))}</span>`).join('')}</div></div>`).join('')}</div>`;
+}
+
+// ================================================================== Recebimentos › Suprimentos (resumo de todas)
+const SR = { q: '', filtro: 'todas', ordem: 'nivel' };
+const ORDEM_SUP = ['preto', 'azul', 'magenta', 'amarelo', 'caixa'];
+// menor nível entre tintas/toners e caixa (para ordenar; sem leitura vai para o fim)
+const menorNivel = s => s && s.ok ? Math.min(101, ...s.itens.filter(i => i.item !== 'outro' && i.pct != null).map(i => i.pct)) : 102;
+function cartaoSup(i) {
+  const s = supDe(i.selb), c = cadDe(i.selb), scanner = c && (c.tipo === 'scanner' || c.suprimento === 'nenhum');
+  const it = s && s.ok ? s.itens.filter(x => x.item !== 'outro').sort((a, b) => ORDEM_SUP.indexOf(a.item) - ORDEM_SUP.indexOf(b.item)) : [];
+  const al = alertasSup(s), pior = al.some(x => x.estado === 'vazio') ? 'bad' : al.length ? 'warn' : '';
+  const linha = x => { const cd = codigoSup(x, i.selb); return `
+      <div class="sr-sup est-${esc(x.estado.replace(' ', '-'))}" title="${esc(nomeSup(x))}${cd ? ' · ' + esc(cd.cod) : ''}: ${esc(valorSup(x))}">
+        <span class="sr-nome"><span class="it-bola it-${x.item}">${x.item === 'caixa' ? IC('caixa') : ''}</span><span>${esc(SUP_NOME[x.item])}${cd ? `<small class="mono">${esc(cd.cod)}${cd.cad ? ' *' : ''}</small>` : ''}</span></span>
+        <span class="sup-trilho"><span class="sup-fill it-${x.item}" style="width:${x.pct ?? (x.estado === 'tem' ? 100 : 0)}%"></span></span>
+        <span class="sr-val">${x.pct != null ? x.pct + '%' : x.estado === 'tem' ? 'ok' : '?'}</span></div>`; };
+  return `<article class="sr-card ${pior}" data-imp="${esc(i.selb)}" tabindex="0">
+    <header><div class="sr-tit">${situacaoHtml(i.ip)}<b>${esc(i.selb)}</b><span class="muted">${esc(nomeImp(i))}</span></div>
+      ${pior ? `<span class="badge ${pior}">${al.length === 1 ? '1 alerta' : al.length + ' alertas'}</span>` : ''}</header>
+    <small class="sr-local">${i.local ? esc(i.local) : '<span class="muted">sem local</span>'}</small>
+    ${scanner ? '<p class="muted sr-msg">Scanner: sem tinta/toner.</p>'
+      : !s ? '<p class="muted sr-msg">Ainda não lida.</p>'
+      : !s.ok ? `<p class="sr-msg"><span class="badge">sem leitura</span> <small class="muted">${esc(s.erro || '')}</small></p>`
+      : `<div class="sr-sups">${it.map(linha).join('')}${semCaixa(it, i.selb) ? `<div class="sr-sup est-desconhecido" title="A impressora não informa a caixa de manutenção por SNMP"><span class="sr-nome"><span class="it-bola it-caixa">${IC('caixa')}</span><span>Caixa</span></span><span class="sup-trilho"></span><span class="sr-val muted">n/i</span></div>` : ''}</div>`}
+    ${s ? `<small class="muted sr-lido">lido ${haQuanto(s.lidoEm)}</small>` : ''}
+  </article>`;
+}
+async function renderSuprimentosResumo() {
+  const el = $('#mod-receb');
+  el.innerHTML = abasReceb('suprimentos') + '<div class="panel">Carregando...</div>';
+  if (!(await needServer(el))) return;
+  await Promise.all([atualizarMonitor(), carregarSelbsCad()]);
+  const D = MON.dados;
+  if (!D) { el.innerHTML = abasReceb('suprimentos') + '<div class="panel"><p class="err">Não foi possível carregar as impressoras.</p></div>'; return; }
+  const imps = D.impressoras;
+  const lidas = imps.filter(i => supDe(i.selb) && supDe(i.selb).ok);
+  const comAl = imps.filter(i => alertasSup(supDe(i.selb)).length);
+  const trocar = imps.filter(i => alertasSup(supDe(i.selb)).some(x => x.estado === 'vazio'));
+  const semLeitura = imps.filter(i => { const c = cadDe(i.selb); return !(c && (c.tipo === 'scanner' || c.suprimento === 'nenhum')) && !(supDe(i.selb) && supDe(i.selb).ok); });
+  // o que precisa comprar: itens em alerta agrupados por código (ou cor + modelo, sem código)
+  const compra = new Map();
+  for (const i of comAl) for (const x of alertasSup(supDe(i.selb))) {
+    const cd = codigoSup(x, i.selb), k = cd ? cd.cod : x.item + '|' + nomeImp(i);
+    const g = compra.get(k) || { cod: cd ? cd.cod : '', item: x.item, modelo: nomeImp(i), selbs: [], trocar: 0 };
+    g.selbs.push(i.selb); if (x.estado === 'vazio') g.trocar++;
+    compra.set(k, g);
+  }
+  const compras = [...compra.values()].sort((a, b) => b.trocar - a.trocar || b.selbs.length - a.selbs.length || ORDEM_SUP.indexOf(a.item) - ORDEM_SUP.indexOf(b.item));
+  el.innerHTML = abasReceb('suprimentos') + `
+    <div class="panel">
+      <div class="head-row"><h2>Tinta, toner e caixa de manutenção</h2><div class="filters" style="margin:0">
+        <small class="muted">${SUP.dados && SUP.dados.rodada ? `leitura automática a cada ${SUP.dados.horas} h · última ${haQuanto(SUP.dados.rodada)}` : ''}</small>
+        <button class="btn ghost small" id="srLer">${IC('caixa')}Ler todas agora</button></div></div>
+      <div class="stats">
+        ${statHtml(`${lidas.length}<small>/${imps.length}</small>`, 'impressoras com leitura', 'check', 'ok')}
+        ${statHtml(comAl.length, `com algum item em ${LIMITE_SUP}% ou menos`, 'caixa', comAl.length ? 'warn' : '')}
+        ${statHtml(trocar.length, 'com item para trocar (5% ou menos)', 'alerta', trocar.length ? 'bad' : '')}
+        ${statHtml(semLeitura.length, 'sem leitura', 'relogio', '')}
+      </div>
+      ${compras.length ? `<h3 class="sr-h3">Para comprar / separar</h3>
+      <div class="tablewrap"><table><thead><tr><th class="nosort">Código</th><th class="nosort">Item</th><th class="nosort">Impressoras</th><th class="nosort t">Qtd.</th></tr></thead><tbody>
+      ${compras.map(g => `<tr><td class="mono"><b>${esc(g.cod || '—')}</b>${g.cod ? '' : ` <small class="muted">sem código no cadastro</small>`}</td>
+        <td><span class="sr-item"><span class="it-bola it-${g.item}">${g.item === 'caixa' ? IC('caixa') : ''}</span><span>${esc(SUP_NOME[g.item])}<br><small class="muted">${esc(g.modelo)}</small></span></span></td>
+        <td>${g.selbs.map(x => `<a href="#receb/impressoras~${encodeURIComponent(x)}">${esc(x)}</a>`).join(', ')}</td>
+        <td class="t"><b>${g.selbs.length}</b>${g.trocar ? ` <span class="badge bad" title="com 5% ou menos">${g.trocar} trocar</span>` : ''}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+    </div>
+    <div class="panel">
+      <div class="filters">
+        <label>Buscar <input type="search" id="srQ" value="${esc(SR.q)}" placeholder="SELB, local, modelo, código" style="min-width:240px"></label>
+        <div class="seg2">${[['todas', 'Todas'], ['alerta', 'Com alerta'], ['sem', 'Sem leitura']].map(([v, t]) => `<label class="seg-op"><input type="radio" name="srF" value="${v}" ${SR.filtro === v ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div>
+        <label>Ordenar <select id="srOrdem">${[['nivel', 'menor nível primeiro'], ['selb', 'SELB'], ['local', 'local']].map(([v, t]) => `<option value="${v}" ${SR.ordem === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+        <span class="muted" id="srN"></span></div>
+      <div id="srGrade"></div>
+      <p class="muted"><small>Caixa de manutenção em % de vida útil (100% = nova). n/i = a impressora não informa. * código anotado na observação do SELB.</small></p>
+    </div>`;
+  const desenhar = () => {
+    const q = nrm(SR.q);
+    const lista = imps.filter(i => {
+      if (SR.filtro === 'alerta' && !alertasSup(supDe(i.selb)).length) return false;
+      if (SR.filtro === 'sem' && !semLeitura.includes(i)) return false;
+      if (!q) return true;
+      const s = supDe(i.selb), c = cadDe(i.selb);
+      const cods = s && s.ok ? s.itens.map(x => (codigoSup(x, i.selb) || {}).cod || '') : [];
+      return nrm([i.selb, i.local, nomeImp(i), i.ip, c && c.obs, ...cods].join(' ')).includes(q);
+    }).sort((a, b) => SR.ordem === 'selb' ? a.selb.localeCompare(b.selb, 'pt', { numeric: true })
+      : SR.ordem === 'local' ? (a.local || '~').localeCompare(b.local || '~', 'pt') || a.selb.localeCompare(b.selb, 'pt', { numeric: true })
+      : menorNivel(supDe(a.selb)) - menorNivel(supDe(b.selb)));
+    $('#srN').textContent = `${lista.length} de ${imps.length}`;
+    $('#srGrade').innerHTML = !imps.length ? vazioHtml('impressora', 'Nenhuma impressora com IP', 'Cadastre o IP das impressoras na aba SELBs.')
+      : !lista.length ? vazioHtml('busca', 'Nenhuma impressora encontrada', '') : `<div class="sr-grade">${lista.map(cartaoSup).join('')}</div>`;
+    $('#srGrade').querySelectorAll('.sr-card').forEach(c => {
+      const ir = () => { location.hash = 'receb/impressoras~' + encodeURIComponent(c.dataset.imp); };
+      c.addEventListener('click', ir); c.addEventListener('keydown', e => { if (e.key === 'Enter') ir(); });
+    });
+  };
+  desenhar();
+  $('#srQ').addEventListener('input', e => { SR.q = e.target.value; desenhar(); });
+  el.querySelectorAll('input[name="srF"]').forEach(r => r.addEventListener('change', () => { SR.filtro = r.value; desenhar(); }));
+  $('#srOrdem').addEventListener('change', e => { SR.ordem = e.target.value; desenhar(); });
+  $('#srLer').addEventListener('click', async e => { const b = e.currentTarget; b.disabled = true; b.textContent = 'Lendo…'; await lerSuprimentosAgora(); renderSuprimentosResumo(); });
 }
 
 // ================================================================== Recebimentos › Impressoras
@@ -209,7 +310,7 @@ async function renderImpressoras(arg = '') {
   if (arg) return renderImpressora(arg);
   el.innerHTML = abasReceb('impressoras') + '<div class="panel">Carregando...</div>';
   if (!(await needServer(el))) return;
-  await atualizarMonitor();
+  await Promise.all([atualizarMonitor(), carregarSelbsCad()]);
   const D = MON.dados;
   const rq = await api('api/monitor/quedas?dias=30').catch(() => null);
   const quedas = rq && rq.ok ? (await rq.json()).quedas : [];

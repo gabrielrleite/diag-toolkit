@@ -773,3 +773,29 @@ td .it-obs { display: inline-block; max-width: 380px; vertical-align: bottom; }
 .sf-snmp { margin: 14px 0 4px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel-2); }
 .sf-snmp-cab { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 @media (max-width: 700px) { .sup-linha { grid-template-columns: 110px 1fr; } .sup-val { grid-column: 1 / -1; } }
+
+/* Recebimentos › Suprimentos: um cartão por impressora */
+.sr-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin: 4px 0 12px; }
+.sr-card { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.sr-card:hover, .sr-card:focus-visible { border-color: var(--accent); box-shadow: 0 2px 10px rgba(0, 0, 0, .06); outline: none; }
+.sr-card.warn { border-left: 4px solid var(--warn); }
+.sr-card.bad { border-left: 4px solid var(--bad); }
+.sr-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sr-tit { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sr-tit .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.sr-local { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr-sups { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+.sr-sup { display: grid; grid-template-columns: 118px 1fr 40px; gap: 8px; align-items: center; font-size: 12.5px; }
+.sr-nome { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.sr-nome > span:last-child { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+.sr-nome small { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr-sup .sup-trilho { height: 8px; }
+.sr-val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink-2); }
+.sr-sup.est-baixo .sr-val { color: var(--warn); }
+.sr-sup.est-vazio .sr-val { color: var(--bad); }
+.sr-sup.est-desconhecido .sup-trilho { background: repeating-linear-gradient(135deg, transparent 0 5px, var(--line) 5px 6px); }
+.sr-msg { margin: 6px 0 0; font-size: 12.5px; }
+.sr-lido { font-size: 11px; margin-top: auto; }
+.sr-h3 { font-size: 14px; margin: 4px 0 8px; }
+.stat .v small { font-size: .55em; color: var(--muted); font-weight: 600; }
+.sr-item { display: inline-flex; align-items: center; gap: 8px; line-height: 1.2; }

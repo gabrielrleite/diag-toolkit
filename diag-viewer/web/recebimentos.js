@@ -73,6 +73,7 @@ async function renderReceb(arg) {
   if (arg === 'importar') return renderImportar();
   if (arg && arg.split('~')[0] === 'selbs') return renderSelbs(arg.split('~').slice(1).join('~'));
   if (arg === 'treino') return renderTreino();
+  if (arg === 'suprimentos') return renderSuprimentosResumo();
   if (arg && arg.split('~')[0] === 'impressoras') return renderImpressoras(arg.split('~').slice(1).join('~'));
   if (arg && arg.split('~')[0] === 'locais') return renderLocais(arg.split('~')[1] || '');
   if (arg) { const [fid, n] = arg.split('~'); return abrirFolha(fid, +n || 0); }
