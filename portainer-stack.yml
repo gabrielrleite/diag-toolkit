@@ -6,7 +6,7 @@
 #   Compose path:         portainer-stack.yml
 # Environment variables: UPLOAD_TOKEN e READ_TOKEN (obrigatórios); PORTA, MAX_MB, ANEXO_MAX_MB, VERSAO,
 #   OCR_MODELO, OCR_PRECISAO, MONITOR_MIN, MONITOR_DIAS (opcionais; minutos entre os pings das impressoras e
-#   dias de histórico de ping guardados).
+#   dias de histórico de ping guardados), SUPRIMENTOS_HORAS (intervalo da leitura de tinta/toner por SNMP).
 #
 # Serviço "ocr" (diag-ocr): lê letra à mão das folhas de recebimento com o TrOCR (ONNX Runtime, sem GPU).
 # Na 1ª execução instala as bibliotecas (~230 MB) e baixa o modelo do Hugging Face (~350 MB, q8);
@@ -76,6 +76,7 @@ services:
       OCR_URL: http://ocr:8000
       MONITOR_MIN: ${MONITOR_MIN:-5}
       MONITOR_DIAS: ${MONITOR_DIAS:-30}
+      SUPRIMENTOS_HORAS: ${SUPRIMENTOS_HORAS:-6}
       TZ: America/Sao_Paulo
     volumes:
       - coletas:/data

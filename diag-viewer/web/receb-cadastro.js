@@ -309,6 +309,8 @@ function formSelb(c, uso) {
       <label>Modelo <input id="sfModelo" value="${esc(c.modelo || '')}" maxlength="120" placeholder="ex.: L6270"></label>
       <label>Nº de série <input id="sfSerie" value="${esc(c.serie || '')}" maxlength="80"></label>
       <label>IP da impressora <input id="sfIp" value="${esc(c.ip || '')}" maxlength="15" inputmode="decimal" placeholder="ex.: 192.168.0.50" autocomplete="off"></label>
+      <label>Comunidade SNMP <input id="sfCom" value="${esc(c.comunidade || '')}" maxlength="64" placeholder="public" autocomplete="off"></label>
+      <div class="sf-testar"><span class="lbl">Níveis de tinta/toner</span><button type="button" class="btn ghost" id="sfTestar">${IC('raio')}Testar leitura</button></div>
     </div>
     <div class="sf-grupos">
       <div><span class="lbl">Impressão</span><div class="seg2">${radio('sfCor', 'colorida', 'Colorida', cor)}${radio('sfCor', 'pb', 'Preto', cor)}</div></div>
@@ -317,6 +319,7 @@ function formSelb(c, uso) {
         ${['preto', 'azul', 'magenta', 'amarelo'].map(k => `<label class="it-chip ${cores.includes(k) ? 'on' : ''}"><input type="checkbox" value="${k}" ${cores.includes(k) ? 'checked' : ''}><span class="it-bola it-${k}"></span>${ITENS[k]}</label>`).join('')}</div></div>
       <div><span class="lbl">Manutenção</span><p class="sf-nota"><span class="it-bola it-caixa">${IC('caixa')}</span>Toda impressora usa caixa de manutenção: ela entra sozinha nos itens (scanner não).</p></div>
     </div>
+    <div id="sfSnmp" class="sf-snmp" hidden></div>
     <label class="full">Observação — códigos das tintas/toners e da caixa
       <textarea id="sfObs" rows="3" maxlength="2000" placeholder="ex.: Tinta T544120 (preto), T544220 (azul), T544320 (magenta), T544420 (amarelo) · Caixa C9345">${esc(c.obs || '')}</textarea></label>
     <div class="dlg-actions">${c.novo ? '' : '<button class="btn ghost perigo" id="sfExcluir">Excluir cadastro</button>'}<a class="btn ghost" href="#receb/selbs">Cancelar</a><button class="btn" id="sfSalvar">Salvar cadastro</button></div>
@@ -342,6 +345,18 @@ function ligarFormSelb(c) {
   }));
   f.querySelectorAll('.it-chip input[type="checkbox"]').forEach(cb => cb.addEventListener('change', () => cb.closest('.it-chip').classList.toggle('on', cb.checked)));
   atualizar();
+  // lê agora, pela rede, os níveis da impressora (SNMP) sem gravar nada
+  $('#sfTestar').addEventListener('click', async e => {
+    const ip = $('#sfIp').value.trim(), box = $('#sfSnmp');
+    if (!ipValido(ip)) { alert('Informe um IP válido para testar.'); return $('#sfIp').focus(); }
+    e.currentTarget.disabled = true; box.hidden = false; box.innerHTML = `<p class="muted">${IC('relogio')} Lendo ${esc(ip)} por SNMP…</p>`;
+    const r = await api('api/suprimentos/testar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip, comunidade: $('#sfCom').value.trim() }) })
+      .then(x => x.json()).catch(() => ({ ok: false, erro: 'servidor indisponível' }));
+    $('#sfTestar').disabled = false;
+    box.innerHTML = r.ok
+      ? `<div class="sf-snmp-cab"><span class="badge ok">leitura ok</span> <b>${esc(r.modelo || 'modelo não informado')}</b>${r.serie ? ` <small class="mono">série ${esc(r.serie)}</small>` : ''} <small class="muted">SNMP ${esc(r.versao)} · ${r.ms} ms</small></div>${suprimentosHtml(r.itens)}`
+      : `<p class="err">${IC('alerta')} Não foi possível ler: ${esc(r.erro || 'erro')}</p>${r.sysDescr ? `<p class="muted">O equipamento respondeu: ${esc(r.sysDescr)}</p>` : ''}`;
+  });
   $('#sfSalvar').addEventListener('click', async e => {
     const selb = $('#sfSelb').value.trim().toUpperCase();
     if (!selb || RecebOCR.separarSelbs(selb).length !== 1) { alert('Informe um SELB (um só).'); return $('#sfSelb').focus(); }
@@ -350,7 +365,7 @@ function ligarFormSelb(c) {
     const corpo = {
       tipo: $('#sfTipo').value, marca: $('#sfMarca').value, modelo: $('#sfModelo').value, serie: $('#sfSerie').value,
       cor: f.querySelector('input[name="sfCor"]:checked').value, suprimento: f.querySelector('input[name="sfSup"]:checked').value,
-      cores: [...f.querySelectorAll('#sfCores input:checked')].map(cb => cb.value), ip: $('#sfIp').value.trim(), obs: $('#sfObs').value,
+      cores: [...f.querySelectorAll('#sfCores input:checked')].map(cb => cb.value), ip: $('#sfIp').value.trim(), comunidade: $('#sfCom').value.trim(), obs: $('#sfObs').value,
     };
     e.target.disabled = true;
     const r = await api('api/receb-selbs/' + encodeURIComponent(selb), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }).catch(() => null);
