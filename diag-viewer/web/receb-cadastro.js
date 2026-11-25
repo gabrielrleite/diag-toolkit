@@ -156,7 +156,7 @@ async function renderLocais(editarId) {
   const cb = nome => `<input type="checkbox" class="lc-sel" data-nome="${esc(nome)}" ${sel.has(nrm(nome)) ? 'checked' : ''} aria-label="Selecionar ${esc(nome)}">`;
   el.innerHTML = abasReceb('locais') + `
     ${editando ? formLocal(editando) : ''}
-    <div class="panel">
+    <div class="panel" data-recolher="locais-cad">
       <div class="head-row"><h2>${TX('locais.titulo')}</h2><div class="filters" style="margin:0">
         <button class="btn ghost" id="lcCats" title="Criar, renomear e excluir categorias">${IC('tag')}Categorias</button>
         <button class="btn ghost" id="lcCategorizar" disabled title="Definir a categoria dos locais marcados">${IC('tag')}Definir categoria</button>
@@ -166,10 +166,11 @@ async function renderLocais(editarId) {
       ${!CAD.locais.length ? vazioHtml('local', 'Nenhum local cadastrado', 'Cadastre com "Novo local" ou a partir dos locais usados nas entregas, abaixo.') : `
       <div class="filters"><label>Buscar <input type="search" id="lcQ" value="${esc(CAD.qLocal)}" placeholder="nome, endereço, bairro..." style="min-width:260px"></label>
         <label>Mostrar <select id="lcMostra">${FILTROS_CAD.map(([v, t]) => `<option value="${v}" ${(CAD.fMostra || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label><span class="muted" id="lcN"></span>
+        ${CAD.locais.some(L => L.pai) ? `<span class="lc-arvore"><button type="button" class="btn ghost small" id="lcExpandir">Expandir salas</button><button type="button" class="btn ghost small" id="lcRecolher">Minimizar salas</button></span>` : ''}
         ${CAD.categorias.length ? `<div class="cat-filtro" role="group" aria-label="Filtrar por categoria">${[['', 'Todas'], ...CAD.categorias.map(c => [c.id, c.nome, c.cor]), ['-', 'Sem categoria']].map(([id, nome, cor]) => `<button type="button" class="cat-chip ${cor ? 'cat-' + cor : ''} ${CAD.fCat === id ? 'on' : ''}" data-fcat="${esc(id)}">${esc(nome)} <small>${id ? CAD.locais.filter(L => !L.pai || !CAD.locais.some(x => x.id === L.pai)).filter(L => casaCategoria(L.nome, id)).length : ''}</small></button>`).join('')}</div>` : ''}</div>
       <div class="tablewrap"><table><thead><tr><th class="nosort" style="width:28px"></th><th class="nosort">Local</th><th class="nosort">Endereço</th><th class="nosort">Entregas</th><th class="nosort"></th></tr></thead><tbody id="lcLista"></tbody></table></div>`}
     </div>
-    <div class="panel">
+    <div class="panel" data-recolher="locais-usados">
       <div class="head-row"><h2>${TX('locais.usados')}</h2></div>
       <p class="muted">${TX('locais.usadosAjuda')}</p>
       ${!usados.size ? '<p class="muted">Nenhuma entrega com local.</p>' : `
@@ -183,11 +184,12 @@ async function renderLocais(editarId) {
   const vincDe = L => [...RB.selbsCad.values()].filter(c => c.local && nrm(c.local) === nrm(L.nome)).map(c => c.selb);
   const subsDe = L => CAD.locais.filter(x => x.pai === L.id).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { numeric: true }));
   const raiz = L => !L.pai || !CAD.locais.some(x => x.id === L.pai);
-  const linhaLocal = (L, P) => {
+  const abertos = CAD.abertos || (CAD.abertos = lerSetLocal('lcAbertos')); // principais com as salas à mostra
+  const linhaLocal = (L, P, comSeta = false, aberto = false) => {
     const n = contaNome(L.nome), subs = P ? [] : subsDe(L), nSubs = subs.reduce((a, x) => a + contaNome(x.nome), 0);
     const end = enderecoTxt(L);
     return `<tr class="${P ? 'lc-sub' : subs.length ? 'lc-pai' : ''}"><td>${cb(L.nome)}</td>
-      <td>${P ? '<span class="lc-ramo">└</span>' : ''}<b>${esc(L.nome)}</b> ${catBadge(categoriaDoLocal(L.nome), !catPorId(L.categoria))}${subs.length ? ` <span class="badge">${subs.length} ${subs.length === 1 ? 'sala' : 'salas'}</span>` : ''}${L.referencia ? `<br><small>${esc(L.referencia)}</small>` : ''}</td>
+      <td>${P ? '<span class="lc-ramo">└</span>' : ''}${comSeta && subs.length ? `<button type="button" class="rc-tog lc-tog" data-tog="${esc(L.id)}" aria-expanded="${aberto}" title="${aberto ? 'Minimizar' : 'Expandir'} as salas" aria-label="${aberto ? 'Minimizar' : 'Expandir'} as salas de ${esc(L.nome)}"></button>` : ''}<b>${esc(L.nome)}</b> ${catBadge(categoriaDoLocal(L.nome), !catPorId(L.categoria))}${subs.length ? ` <span class="badge">${subs.length} ${subs.length === 1 ? 'sala' : 'salas'}</span>` : ''}${L.referencia ? `<br><small>${esc(L.referencia)}</small>` : ''}</td>
       <td>${end ? esc(end) : P && enderecoTxt(P) ? `<span class="muted">${esc(enderecoTxt(P))} (do principal)</span>` : '<span class="muted">sem endereço</span>'}${L.obs ? `<br><small>${esc(L.obs)}</small>` : ''}</td>
       <td>${n ? `<button class="linklike" data-ver="${esc(L.nome)}">${n}</button>` : '0'}${vincDe(L).length ? ` <small class="muted" title="SELBs vinculados: ${esc(vincDe(L).join(', '))}">· ${vincDe(L).length} SELB${vincDe(L).length > 1 ? 's' : ''} vinculado${vincDe(L).length > 1 ? 's' : ''}</small>` : ''}${nSubs ? ` <small class="muted" title="entregas nas salas/sublocais">+${nSubs} nas salas</small>` : ''}</td>
       <td class="acoes">${P ? `<button class="btn ghost small" data-solta="${esc(L.id)}" title="Deixa de ser sala de ${esc(P.nome)}">Desvincular</button>` : ''}
@@ -227,11 +229,18 @@ async function renderLocais(editarId) {
       const raizes = CAD.locais.filter(raiz).filter(L => (!q || casa(L) || subsDe(L).some(casa)) && casaCategoria(L.nome, CAD.fCat))
         .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
       n = raizes.length;
-      html = raizes.map(L => linhaLocal(L) + subsDe(L).filter(x => !q || casa(L) || casa(x)).map(x => linhaLocal(x, L)).join('')).join('');
+      html = raizes.map(L => {
+        // busca que casa com uma sala abre o principal dela
+        const aberto = abertos.has(L.id) || (q && !casa(L) && subsDe(L).some(casa));
+        return linhaLocal(L, null, true, aberto) + (aberto ? subsDe(L).filter(x => !q || casa(L) || casa(x)).map(x => linhaLocal(x, L)).join('') : '');
+      }).join('');
     }
     box.innerHTML = html || `<tr><td colspan="5" class="muted">Nenhum local com esse filtro.</td></tr>`;
     $('#lcN').textContent = `${n} local(is)`;
     box.querySelectorAll('[data-ver]').forEach(b => b.addEventListener('click', () => { RB.fLocal = b.dataset.ver; RB.fSelb = ''; RB.q = ''; location.hash = 'receb'; }));
+    box.querySelectorAll('[data-tog]').forEach(b => b.addEventListener('click', () => {
+      const id = b.dataset.tog; abertos.has(id) ? abertos.delete(id) : abertos.add(id); gravarSetLocal('lcAbertos', abertos); desenharCad();
+    }));
     box.querySelectorAll('[data-excluir]').forEach(b => b.addEventListener('click', async () => {
       const L = CAD.locais.find(x => x.id === b.dataset.excluir);
       const subs = subsDe(L).length;
@@ -275,6 +284,11 @@ async function renderLocais(editarId) {
   });
   if ($('#lcQ')) $('#lcQ').addEventListener('input', e => { CAD.qLocal = e.target.value; desenharCad(); });
   if ($('#lcMostra')) $('#lcMostra').addEventListener('change', e => { CAD.fMostra = e.target.value; desenharCad(); });
+  if ($('#lcExpandir')) {
+    $('#lcExpandir').addEventListener('click', () => { CAD.locais.filter(L => CAD.locais.some(x => x.pai === L.id)).forEach(L => abertos.add(L.id)); gravarSetLocal('lcAbertos', abertos); desenharCad(); });
+    $('#lcRecolher').addEventListener('click', () => { abertos.clear(); gravarSetLocal('lcAbertos', abertos); desenharCad(); });
+  }
+  ligarRecolhiveis(el);
   // locais usados nas entregas: busca + filtro "Mostrar"
   const desenharUsados = () => {
     const box = $('#lcUsados'); if (!box) return;
@@ -332,6 +346,23 @@ async function renderLocais(editarId) {
   desenharCad();
   desenharUsados();
   atualizarSel();
+}
+
+// ---------------------------------------------------------------- recolher/expandir (lembra no navegador)
+function lerSetLocal(chave) { try { return new Set(JSON.parse(localStorage.getItem(chave) || '[]')); } catch { return new Set(); } }
+function gravarSetLocal(chave, set) { try { localStorage.setItem(chave, JSON.stringify([...set])); } catch { /* sem storage */ } }
+// painéis com data-recolher="chave": botão de seta no título recolhe o conteúdo (fica só o título)
+function ligarRecolhiveis(raiz) {
+  const recolhidos = lerSetLocal('painelRecolhido');
+  raiz.querySelectorAll('[data-recolher]').forEach(p => {
+    const k = p.dataset.recolher, cab = p.querySelector(':scope > .head-row, :scope > legend');
+    if (!cab || cab.querySelector('.rc-tog')) return;
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'rc-tog';
+    const aplicar = () => { const fechado = recolhidos.has(k); p.classList.toggle('recolhido', fechado); b.setAttribute('aria-expanded', String(!fechado)); b.title = fechado ? 'Expandir' : 'Minimizar'; b.setAttribute('aria-label', b.title); };
+    b.addEventListener('click', e => { e.preventDefault(); recolhidos.has(k) ? recolhidos.delete(k) : recolhidos.add(k); gravarSetLocal('painelRecolhido', recolhidos); aplicar(); });
+    cab.prepend(b); aplicar();
+  });
 }
 
 // filtros "Mostrar" da aba Locais: [valor, rótulo, teste]

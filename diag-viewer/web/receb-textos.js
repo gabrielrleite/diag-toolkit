@@ -76,7 +76,7 @@ async function renderTextosReceb() {
       <div class="head-row"><h2>Textos da aba Recebimentos</h2><div class="filters" style="margin:0">
         <button class="btn ghost" id="txPadrao">Restaurar todos</button><button class="btn" id="txSalvar">Salvar textos</button></div></div>
       <p class="muted">Altere títulos, nomes das abas e textos de ajuda. Campo vazio = texto padrão. Use <b>**negrito**</b> para destacar e Enter para quebrar linha. Vale para todos os usuários.</p>
-      ${TEXTOS_RECEB.map(([grupo, itens]) => `<fieldset class="tx-grupo"><legend>${esc(grupo)}</legend>
+      ${TEXTOS_RECEB.map(([grupo, itens]) => `<fieldset class="tx-grupo" data-recolher="tx-${esc(nrm(grupo).replace(/ /g, '-'))}"><legend>${esc(grupo)}</legend>
         ${itens.map(([k, rot, pad]) => {
           const longo = pad.length > 70, v = RT.custom[k] || '';
           return `<div class="tx-campo ${v ? 'mudou' : ''}" data-k="${k}">
@@ -87,6 +87,7 @@ async function renderTextosReceb() {
         }).join('')}</fieldset>`).join('')}
       <div class="dlg-actions"><button class="btn" id="txSalvar2">Salvar textos</button></div>
     </div>`;
+  ligarRecolhiveis(el);
   el.querySelectorAll('.tx-campo').forEach(c => {
     const inp = c.querySelector('input, textarea'), pre = c.querySelector('.tx-pre span');
     inp.addEventListener('input', () => { pre.innerHTML = marcacaoHtml(inp.value.trim() || TXT_PADRAO[c.dataset.k]); c.classList.toggle('mudou', !!inp.value.trim()); });
