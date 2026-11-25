@@ -90,6 +90,8 @@ const duracao = min => {
 };
 const dataHora = iso => { if (!iso) return '—'; const d = new Date(iso); return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 const hora = iso => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+// local com o principal, quando é sala/sublocal: "Escola X › Sala 3"
+const localImp = i => i.local && i.localPrincipal ? `${i.localPrincipal} › ${i.local}` : i.local || '';
 const nomeImp = i => [i.marca, i.modelo].filter(Boolean).join(' ') || ({ impressora: 'Impressora', multifuncional: 'Multifuncional', scanner: 'Scanner' }[i.tipo] || 'Equipamento');
 const ateTxt = p => p && p.ate ? `até ${dataHora(p.ate)}` : 'até retomar';
 const pctTxt = v => v == null ? '—' : `${String(v).replace('.', ',')}%`;
@@ -166,7 +168,7 @@ function desenharMonitor() {
       <div><b>${fora.length === 1 ? '1 impressora fora do ar' : `${fora.length} impressoras fora do ar`}</b><br><small>${on} online de ${ativas.length} · ${rodape}</small></div>
       <div class="imp-acoes">${botoes}</div></div>
       <div class="imp-lista">${fora.map(i => `<div class="imp-item"><span class="mon-bola off"></span>
-        <div><b>${esc(i.selb)}</b> <span class="muted">${esc(nomeImp(i))}</span><br><small>${i.local ? esc(i.local) + ' · ' : ''}fora do ar ${haQuanto(i.desde)}</small></div>
+        <div><b>${esc(i.selb)}</b> <span class="muted">${esc(nomeImp(i))}</span><br><small>${i.local ? esc(localImp(i)) + ' · ' : ''}fora do ar ${haQuanto(i.desde)}</small></div>
         <a class="ip-link" href="http://${esc(i.ip)}" target="_blank" rel="noopener" title="Abrir o painel da impressora">${IC('monitor')}${esc(i.ip)}</a></div>`).join('')}</div>`;
   }
   const b = document.getElementById('monVerificar');
@@ -188,7 +190,7 @@ function desenharSuprStatus() {
     <div><b>${com.length === 1 ? '1 impressora com suprimento baixo' : `${com.length} impressoras com suprimento baixo`}</b><br><small>Tinta/toner ou vida útil da caixa de manutenção com ${LIMITE_SUP}% ou menos · leitura a cada ${SUP.dados.horas} h${SUP.dados.rodada ? `, última ${haQuanto(SUP.dados.rodada)}` : ''}</small></div>
     <div class="imp-acoes"><a class="btn ghost small" href="#receb/suprimentos">${IC('caixa')}Ver suprimentos</a></div></div>
     <div class="imp-lista">${com.map(({ i, a }) => `<div class="imp-item sup">
-      <div><b>${esc(i.selb)}</b> <span class="muted">${esc(nomeImp(i))}</span>${i.local ? `<br><small>${esc(i.local)}</small>` : ''}</div>
+      <div><b>${esc(i.selb)}</b> <span class="muted">${esc(nomeImp(i))}</span>${i.local ? `<br><small>${esc(localImp(i))}</small>` : ''}</div>
       <div class="sup-tags">${a.map(z => `<span class="sup-tag ${z.estado === 'vazio' ? 'bad' : 'warn'}"><span class="it-bola it-${z.item}">${z.item === 'caixa' ? IC('caixa') : ''}</span>${esc(SUP_NOME[z.item])} ${esc(valorSup(z))}</span>`).join('')}</div></div>`).join('')}</div>`;
 }
 
@@ -209,7 +211,7 @@ function cartaoSup(i) {
   return `<article class="sr-card ${pior}" data-imp="${esc(i.selb)}" tabindex="0">
     <header><div class="sr-tit">${situacaoHtml(i.ip)}<b>${esc(i.selb)}</b><span class="muted">${esc(nomeImp(i))}</span></div>
       ${pior ? `<span class="badge ${pior}">${al.length === 1 ? '1 alerta' : al.length + ' alertas'}</span>` : ''}</header>
-    <small class="sr-local">${i.local ? esc(i.local) : '<span class="muted">sem local</span>'}</small>
+    <small class="sr-local">${i.local ? esc(localImp(i)) : '<span class="muted">sem local</span>'}</small>
     ${scanner ? '<p class="muted sr-msg">Scanner: sem tinta/toner.</p>'
       : !s ? '<p class="muted sr-msg">Ainda não lida.</p>'
       : !s.ok ? `<p class="sr-msg"><span class="badge">sem leitura</span> <small class="muted">${esc(s.erro || '')}</small></p>`
@@ -274,9 +276,9 @@ async function renderSuprimentosResumo() {
       if (!q) return true;
       const s = supDe(i.selb), c = cadDe(i.selb);
       const cods = s && s.ok ? s.itens.map(x => (codigoSup(x, i.selb) || {}).cod || '') : [];
-      return nrm([i.selb, i.local, nomeImp(i), i.ip, c && c.obs, ...cods].join(' ')).includes(q);
+      return nrm([i.selb, localImp(i), nomeImp(i), i.ip, c && c.obs, ...cods].join(' ')).includes(q);
     }).sort((a, b) => SR.ordem === 'selb' ? a.selb.localeCompare(b.selb, 'pt', { numeric: true })
-      : SR.ordem === 'local' ? (a.local || '~').localeCompare(b.local || '~', 'pt') || a.selb.localeCompare(b.selb, 'pt', { numeric: true })
+      : SR.ordem === 'local' ? (localImp(a) || '~').localeCompare(localImp(b) || '~', 'pt') || a.selb.localeCompare(b.selb, 'pt', { numeric: true })
       : menorNivel(supDe(a.selb)) - menorNivel(supDe(b.selb)));
     $('#srN').textContent = `${lista.length} de ${imps.length}`;
     $('#srGrade').innerHTML = !imps.length ? vazioHtml('impressora', 'Nenhuma impressora com IP', 'Cadastre o IP das impressoras na aba SELBs.')
@@ -340,7 +342,7 @@ async function renderImpressoras(arg = '') {
       ${legendaStatus()}
       <div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Impressora</th><th class="nosort">Situação</th><th class="nosort">Tinta / toner / caixa</th><th class="nosort">Últimas 24 h</th><th class="nosort">24 h</th><th class="nosort">7 dias</th><th class="nosort">Quedas (7 d)</th><th class="nosort"></th></tr></thead><tbody>
       ${imps.map(i => `<tr data-imp="${esc(i.selb)}">
-        <td><b>${esc(i.selb)}</b> <span class="muted">${esc(nomeImp(i))}</span><br><small>${i.local ? esc(i.local) + ' · ' : ''}<a class="ip-link" href="http://${esc(i.ip)}" target="_blank" rel="noopener">${esc(i.ip)}</a></small></td>
+        <td><b>${esc(i.selb)}</b> <span class="muted">${esc(nomeImp(i))}</span><br><small>${i.local ? esc(localImp(i)) + ' · ' : ''}<a class="ip-link" href="http://${esc(i.ip)}" target="_blank" rel="noopener">${esc(i.ip)}</a></small></td>
         <td>${i.pausada || D.pausa ? `<span class="badge">pausada ${esc(ateTxt(i.pausada || D.pausa))}</span>`
           : i.online === null ? '<span class="badge">aguardando</span>' : i.online ? `<span class="badge ok">online</span><br><small>${i.ms != null ? `~${i.ms} ms · ` : ''}${haQuanto(i.verificadoEm)}</small>`
           : `<span class="badge bad">fora do ar</span><br><small>${haQuanto(i.desde)}</small>`}</td>
@@ -401,7 +403,7 @@ async function renderImpressora(selb) {
   const foraMin = H.quedas.reduce((a, q) => a + (q.fim ? q.min : Math.round((Date.now() - Date.parse(q.inicio)) / 60000)), 0);
   el.innerHTML = abasReceb('impressoras') + `
     <div class="panel ld-bar"><div><a href="#receb/impressoras" class="btn small ghost">← Impressoras</a>
-        <b class="ld-title">${esc(selb)}</b><small>${i ? esc(nomeImp(i)) + (i.local ? ' · ' + esc(i.local) : '') : ''}</small>
+        <b class="ld-title">${esc(selb)}</b><small>${i ? esc(nomeImp(i)) + (i.local ? ' · ' + esc(localImp(i)) : '') : ''}</small>
         ${i ? `<a class="ip-link" href="http://${esc(i.ip)}" target="_blank" rel="noopener">${situacaoHtml(i.ip)}${esc(i.ip)}</a>` : ''}</div>
       <div class="filters" style="margin:0">
         <div class="seg2">${[[1, '24 h'], [7, '7 dias'], [30, '30 dias']].map(([d, t]) => `<label class="seg-op"><input type="radio" name="impDias" value="${d}" ${d === dias ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div>

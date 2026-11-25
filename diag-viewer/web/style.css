@@ -799,3 +799,27 @@ td .it-obs { display: inline-block; max-width: 380px; vertical-align: bottom; }
 .sr-h3 { font-size: 14px; margin: 4px 0 8px; }
 .stat .v small { font-size: .55em; color: var(--muted); font-weight: 600; }
 .sr-item { display: inline-flex; align-items: center; gap: 8px; line-height: 1.2; }
+
+/* cadastro pela rede (SELB) */
+.dlg-largo { width: min(780px, calc(100vw - 32px)); }
+.dlg-largo[open] { padding: 20px 22px; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 48px); }
+.dlg-largo h2 { margin: 0; font-size: 17px; }
+.dlg-largo p { margin: 0; }
+.cp-lista { overflow: auto; max-height: 55vh; }
+.cp-dif { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.cp-dif s { color: var(--muted); }
+.sf-equip { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 12px; margin-bottom: 12px; border-radius: 10px; background: var(--accent-soft, var(--panel-2)); border: 1px solid var(--line); }
+.sf-equip p { margin: 2px 0 0; }
+.eq-cores { display: inline-flex; gap: 3px; vertical-align: middle; }
+.eq-cores .it-bola { width: 12px; height: 12px; }
+@keyframes sf-brilho { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 3px transparent; } }
+.sf-preenchido { animation: sf-brilho 1.2s ease-out; }
+
+/* locais: salas/sublocais abaixo do principal */
+tr.lc-pai td { border-top: 1px solid var(--line); }
+tr.lc-sub td:nth-child(2) { padding-left: 26px; }
+.lc-ramo { color: var(--muted); margin-right: 6px; }
+.lc-esc { display: flex; flex-direction: column; gap: 6px; max-height: 45vh; overflow: auto; }
+.lc-esc input:not([type]) { margin-left: 6px; min-width: 200px; }
+.sub-principal { font-size: 11.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.sub-principal .ic { width: 12px; height: 12px; }

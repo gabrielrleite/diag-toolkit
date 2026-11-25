@@ -111,7 +111,7 @@ async function renderReceb(arg) {
         <label class="chk"><input type="checkbox" id="rbPend"> só não conferidos</label>
         <button class="btn ghost small" id="rbLimpar">Limpar filtros</button><span class="muted" id="rbN"></span></div>
       <datalist id="rbDlFSelb">${[...new Set(regs.flatMap(l => selbsDe(l.selb)))].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
-      <datalist id="rbDlFLocal">${[...new Set(regs.map(l => l.local).filter(Boolean))].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
+      <datalist id="rbDlFLocal">${[...new Set([...regs.map(l => l.local), ...regs.map(l => (principalDoLocal(l.local) || {}).nome)].filter(Boolean))].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
       <p class="muted" id="rbResumo" style="margin:0 0 8px"></p>
       <div id="rbRegs"></div></div>` : ''}`;
   el.querySelectorAll('[data-folha]').forEach(tr => tr.addEventListener('click', () => { location.hash = 'receb/' + tr.dataset.folha; }));
@@ -119,11 +119,11 @@ async function renderReceb(arg) {
   let filtrados = regs;
   // filtros sem diferenciar acento/maiúscula; SELB ignora espaços e pontuação
   const N = RecebOCR.normalizar, chave = v => N(v).replace(/ /g, '');
-  for (const l of regs) l._busca = N([l.selb, l.data, l.local, l.folha.titulo].join(' '));
+  for (const l of regs) { l._busca = N([l.selb, l.data, l.local, l.folha.titulo].join(' ')); l._local = N(localComPrincipal(l.local)); }
   regs.sort((a, b) => String(b.dataIso || b.folha.criadoEm).localeCompare(String(a.dataIso || a.folha.criadoEm)) || a.n - b.n);
   const draw = () => {
     const q = N(RB.q), fs = chave(RB.fSelb), fl = N(RB.fLocal), so = $('#rbPend').checked;
-    filtrados = regs.filter(l => (!so || !l.revisado) && (!fs || selbsDe(l.selb).some(x => chave(x).includes(fs))) && (!fl || N(l.local).includes(fl)) && (!q || l._busca.includes(q)));
+    filtrados = regs.filter(l => (!so || !l.revisado) && (!fs || selbsDe(l.selb).some(x => chave(x).includes(fs))) && (!fl || l._local.includes(fl)) && (!q || l._busca.includes(q)));
     $('#rbN').textContent = `${filtrados.length} de ${regs.length}`;
     // resumo do filtro: por SELB mostra os locais por onde passou; por local, quantos SELB diferentes
     let resumo = '';
@@ -136,7 +136,7 @@ async function renderReceb(arg) {
     $('#rbResumo').innerHTML = resumo;
     $('#rbRegs').innerHTML = `<div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Local</th><th class="nosort">SELB</th><th class="nosort">Itens entregues</th><th class="nosort">Data</th><th class="nosort">Folha</th></tr></thead><tbody>
       ${filtrados.slice(0, 1000).map(l => `<tr data-folha="${esc(l.folha.id)}~${l.n}">
-        <td>${l.local ? `<button class="linklike" data-filtro="local" data-v="${esc(l.local)}" title="${esc((localCadastrado(l.local) ? enderecoTxt(localCadastrado(l.local)) + ' — ' : '') + 'clique para filtrar por este local')}">${esc(l.local)}</button>` : '—'}</td>
+        <td>${l.local ? `<button class="linklike" data-filtro="local" data-v="${esc(l.local)}" title="${esc((localCadastrado(l.local) ? enderecoTxt(localCadastrado(l.local)) + ' — ' : '') + 'clique para filtrar por este local')}">${esc(l.local)}</button>${principalDoLocal(l.local) ? `<br><button class="linklike sub-principal" data-filtro="local" data-v="${esc(principalDoLocal(l.local).nome)}" title="Local principal: filtrar por ele e todas as salas">${IC('local')}${esc(principalDoLocal(l.local).nome)}</button>` : ''}` : '—'}</td>
         <td>${selbsDe(l.selb).map(x => `<button class="linklike" data-filtro="selb" data-v="${esc(x)}" title="Filtrar por este SELB">${esc(x)}</button>`).join(', ') || '—'}</td>
         <td>${itensHtml(l.itens)}</td>
         <td class="t">${esc(l.data || '—')}</td>

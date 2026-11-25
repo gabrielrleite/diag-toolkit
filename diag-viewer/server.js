@@ -536,11 +536,23 @@ function sanitizeLocal(b) {
     nome: t('nome', 160), logradouro: t('logradouro', 200), numero: t('numero', 20), complemento: t('complemento', 120),
     bairro: t('bairro', 120), cidade: t('cidade', 120), uf: t('uf', 2).toUpperCase().replace(/[^A-Z]/g, ''),
     cep: t('cep', 9).replace(/[^\d-]/g, ''), referencia: t('referencia', 300), obs: txt(b && b.obs, 1000),
+    pai: LOCID_RE.test(t('pai', 10)) ? t('pai', 10) : '', // sublocal (sala, bloco...) de um local principal
   };
+}
+// sublocal: um nível só. O principal não pode ser sublocal; quem vira sublocal passa os seus sublocais para o novo principal
+function ajustarPai(db, L, id) {
+  if (!L.pai) return null;
+  const p = db.locais.find(x => x.id === L.pai);
+  if (!p || L.pai === id) return 'Local principal inválido.';
+  if (p.pai) L.pai = p.pai; // escolheu um sublocal: usa o principal dele
+  if (L.pai === id) return 'Local principal inválido.';
+  if (id) for (const x of db.locais) if (x.pai === id) x.pai = L.pai;
+  return null;
 }
 async function locaisRoute(req, res, url, id) {
   if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
   const ip = ipOf(req);
+  if (id === 'unificar') return unificarLocais(req, res, ip);
   if (id && !LOCID_RE.test(id)) { req.resume(); return json(res, 400, { erro: 'id de local inválido' }); }
   if (req.method === 'GET' && !id) return json(res, 200, (await lerLocais()).locais);
   let body = {};
@@ -555,6 +567,7 @@ async function locaisRoute(req, res, url, id) {
       const L = sanitizeLocal(body);
       if (!L.nome) return { code: 400, erro: 'Informe o nome do local.' };
       if (dup(L.nome)) return { code: 409, erro: `Já existe o local "${dup(L.nome).nome}".` };
+      const ep = ajustarPai(db, L, ''); if (ep) return { code: 400, erro: ep };
       const novo = { id: crypto.randomBytes(5).toString('hex'), ...L, criadoEm: agora, atualizadoEm: agora };
       db.locais.push(novo); await writeJsonAtomic(LOCAIS_FILE, db);
       return { code: 201, obj: novo, audit: { acao: 'local_cadastrado', local: novo.id, nome: novo.nome } };
@@ -565,6 +578,7 @@ async function locaisRoute(req, res, url, id) {
       const L = sanitizeLocal(body);
       if (!L.nome) return { code: 400, erro: 'Informe o nome do local.' };
       if (dup(L.nome, id)) return { code: 409, erro: `Já existe o local "${dup(L.nome, id).nome}".` };
+      const ep = ajustarPai(db, L, id); if (ep) return { code: 400, erro: ep };
       db.locais[i] = { ...db.locais[i], ...L, atualizadoEm: agora };
       await writeJsonAtomic(LOCAIS_FILE, db);
       return { code: 200, obj: db.locais[i], audit: { acao: 'local_alterado', local: id, nome: L.nome } };
@@ -572,6 +586,7 @@ async function locaisRoute(req, res, url, id) {
     if (req.method === 'DELETE') {
       // fica guardado em "removidos" (auditoria); as entregas não são alteradas
       const [rem] = db.locais.splice(i, 1);
+      for (const x of db.locais) if (x.pai === id) x.pai = ''; // sublocais viram locais principais
       db.removidos = [...(db.removidos || []), { ...rem, removidoEm: agora, removidoPorIp: ip }];
       await writeJsonAtomic(LOCAIS_FILE, db);
       return { code: 200, obj: { ok: true }, audit: { acao: 'local_removido', local: id, nome: rem.nome } };
@@ -580,6 +595,33 @@ async function locaisRoute(req, res, url, id) {
   });
   if (out.audit) await audit({ ...out.audit, ip });
   return json(res, out.code, out.erro ? { erro: out.erro } : out.obj);
+}
+
+// unificar: os locais escolhidos viram sublocais (salas, blocos...) de um local principal.
+// Nomes sem cadastro são cadastrados; as entregas não mudam (continuam com o nome da sala).
+async function unificarLocais(req, res, ip) {
+  if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+  let b; try { b = await readJsonBody(req, 50000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+  const limpa = v => txt(v, 160).replace(/[\r\n\t]+/g, ' ').trim();
+  const principal = limpa(b.principal);
+  const subs = [...new Set((Array.isArray(b.sublocais) ? b.sublocais : []).map(limpa).filter(n => n && normRec(n) !== normRec(principal)))].slice(0, 500);
+  if (!principal || !subs.length) return json(res, 400, { erro: 'Informe o local principal e ao menos um sublocal.' });
+  const out = await withLock('receb-locais', async () => {
+    const db = await lerLocais(), agora = new Date().toISOString();
+    const achar = nome => db.locais.find(l => normRec(l.nome) === normRec(nome));
+    const criar = nome => { const n = { id: crypto.randomBytes(5).toString('hex'), ...sanitizeLocal({ nome }), criadoEm: agora, atualizadoEm: agora }; db.locais.push(n); return n; };
+    const P = achar(principal) || criar(principal);
+    if (P.pai) { P.pai = ''; P.atualizadoEm = agora; } // era sala de outro: vira principal
+    for (const nome of subs) {
+      const L = achar(nome) || criar(nome);
+      for (const x of db.locais) if (x.pai === L.id) x.pai = P.id; // as salas dele passam para o novo principal
+      L.pai = P.id; L.atualizadoEm = agora;
+    }
+    await writeJsonAtomic(LOCAIS_FILE, db);
+    return { principal: P, n: subs.length };
+  });
+  await audit({ acao: 'locais_unificados', principal: out.principal.nome, sublocais: subs, ip });
+  return json(res, 200, out);
 }
 
 // troca (ou apaga, com para = '') um valor de local/SELB em todas as folhas.
@@ -810,6 +852,13 @@ async function registrarAlerta(a) {
   return al;
 }
 // local de cada SELB: o da última entrega registrada
+// nome do local principal de um sublocal (sala) pelo cadastro de locais; '' se não for sublocal
+function principalDe(locais) {
+  const porNome = new Map(locais.map(l => [normRec(l.nome), l])), porId = new Map(locais.map(l => [l.id, l]));
+  return nome => { const l = nome && porNome.get(normRec(nome)); const p = l && l.pai && porId.get(l.pai); return p ? p.nome : ''; };
+}
+// "Principal › Sala" para mensagens
+async function localCompleto(nome) { const p = nome ? principalDe((await lerLocais()).locais)(nome) : ''; return p ? `${p} › ${nome}` : nome || ''; }
 async function ultimosLocais() {
   const m = new Map();
   for (const f of await listFolhas(true)) for (const l of f.linhas) {
@@ -847,7 +896,7 @@ async function rodadaMonitor({ forcar = false } = {}) {
           mudancas.push({ ip, selb: sel, online: r.online, quando });
           await audit({ acao: r.online ? 'impressora_voltou' : 'impressora_caiu', ip, selb: sel });
           console.log(`[monitor] ${sel} (${ip}) ${r.online ? 'voltou' : 'FORA DO AR'}`);
-          const c0 = cads.find(c => c.ip === ip), loc = c0 ? ((await ultimosLocais()).get(chaveSelbRec(c0.selb)) || {}).local : '';
+          const c0 = cads.find(c => c.ip === ip), loc = c0 ? await localCompleto(((await ultimosLocais()).get(chaveSelbRec(c0.selb)) || {}).local) : '';
           await registrarAlerta({ tipo: r.online ? 'retorno' : 'queda', selb: sel, ip,
             texto: r.online ? `✅ Impressora voltou: ${descImp({ ...c0, selb: sel }, loc)} (${ip})` : `🔴 Impressora fora do ar: ${descImp({ ...c0, selb: sel }, loc)} (${ip})` });
         }
@@ -960,19 +1009,12 @@ async function monitorRoute(req, res, url, acao) {
     return json(res, 200, { dias, quedas });
   } else if (req.method !== 'GET') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
   if (limparPausasVencidas()) await salvarMonitor();
-  // local de cada SELB: o da última entrega registrada
-  const ultimoLocal = new Map();
-  for (const f of await listFolhas(true)) for (const l of f.linhas) {
-    if (!l.local) continue;
-    for (const sel of RecebOCR.separarSelbs(l.selb)) {
-      const k = chaveSelbRec(sel), q = l.dataIso || (f.criadoEm || '').slice(0, 10), u = ultimoLocal.get(k);
-      if (!u || q >= u.q) ultimoLocal.set(k, { local: l.local, q });
-    }
-  }
+  // local de cada SELB: o da última entrega registrada (com o local principal, se for uma sala/sublocal)
+  const ultimoLocal = await ultimosLocais(), principal = principalDe((await lerLocais()).locais);
   const resumo = await resumoMonitor();
   const impressoras = (await lerSelbsCad()).selbs.filter(c => ipOk(c.ip)).map(c => {
     const e = monitor.estados[c.ip] || null, k = chaveSelbRec(c.selb), p = monitor.pausa.selbs[k] || null, r = resumo[k] || {};
-    return { selb: c.selb, ip: c.ip, tipo: c.tipo, marca: c.marca, modelo: c.modelo, local: (ultimoLocal.get(k) || {}).local || '',
+    return { selb: c.selb, ip: c.ip, tipo: c.tipo, marca: c.marca, modelo: c.modelo, local: (ultimoLocal.get(k) || {}).local || '', localPrincipal: principal((ultimoLocal.get(k) || {}).local),
       online: e ? e.online : null, desde: e ? e.desde : null, verificadoEm: e ? e.verificadoEm : null, ms: e ? e.ms : null, via: e ? e.via : null,
       pausada: p ? { ate: p.ate, em: p.em, motivo: p.motivo } : null,
       d24: r.d24 ?? null, d7: r.d7 ?? null, faixas: r.faixas || Array(48).fill(null), quedas7: r.quedas7 || 0 };
@@ -1056,7 +1098,7 @@ async function alertasSuprimento(c, ant, r) {
     if (i.item === 'outro' || !['baixo', 'vazio'].includes(i.estado)) continue;
     const a = antes.get(i.item + '|' + i.idx);
     if (a && (grav[a.estado] ?? 0) >= grav[i.estado]) continue; // já estava assim (ou pior)
-    if (local === null) local = ((await ultimosLocais()).get(chaveSelbRec(c.selb)) || {}).local || '';
+    if (local === null) local = await localCompleto(((await ultimosLocais()).get(chaveSelbRec(c.selb)) || {}).local);
     const toner = c.suprimento === 'toner' || /toner/i.test(i.desc + i.tipoTxt);
     const nome = i.item === 'caixa' ? 'Caixa de manutenção' : `${toner ? 'Toner' : 'Tinta'} ${NOME_ITEM[i.item]}`;
     const codigo = i.codigo || cods[i.item] || '';
@@ -1088,6 +1130,24 @@ async function suprimentosRoute(req, res, url, acao) {
     if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
     let b = {}; try { b = await readJsonBody(req); } catch { /* sem corpo = todas */ }
     await rodadaSuprimentos({ selb: txt(b.selb, 40).trim(), forcar: true });
+  } else if (acao === 'cadastro') {
+    // dados do equipamento lidos pela rede (marca, modelo, série, tipo, cores, tinta/toner) que diferem do cadastro
+    const sugestoes = [];
+    for (const c of (await lerSelbsCad()).selbs) {
+      const r = supr.selbs[chaveSelbRec(c.selb)];
+      const eq = r && r.ok ? (r.equipamento || snmp.equipamentoDe(r)) : null;
+      if (!eq) continue;
+      const dif = {};
+      for (const k of ['marca', 'modelo', 'serie']) if (eq[k] && normRec(eq[k]) !== normRec(c[k])) dif[k] = eq[k];
+      // tipo: o nome do modelo só indica multifuncional com segurança; não rebaixa nem mexe em scanner
+      if (eq.tipo && (eq.tipo === 'multifuncional' ? c.tipo === 'impressora' : !c.modelo && c.tipo !== eq.tipo && c.tipo !== 'scanner')) dif.tipo = eq.tipo;
+      if (eq.cor && eq.cor !== c.cor) dif.cor = eq.cor;
+      const ordem = a => ['preto', 'azul', 'magenta', 'amarelo'].filter(x => (a || []).includes(x)).join();
+      if (eq.cores && ordem(eq.cores) !== ordem(c.cores)) dif.cores = eq.cores;
+      if (eq.suprimento && eq.suprimento !== c.suprimento) dif.suprimento = eq.suprimento;
+      if (Object.keys(dif).length) sugestoes.push({ selb: c.selb, lidoEm: r.lidoEm, modeloLido: r.modelo, dif });
+    }
+    return json(res, 200, { sugestoes });
   } else if (acao === 'historico') {
     const selb = txt(url.searchParams.get('selb'), 40).trim(), dias = Math.max(1, Math.min(SUPR_DIAS, +url.searchParams.get('dias') || 90));
     if (!selb) return json(res, 400, { erro: 'Informe o SELB.' });
@@ -1787,7 +1847,7 @@ const server = http.createServer(async (req, res) => {
     if (oc) return await ocrRoute(req, res, url, oc[1]);
     const tr = p.match(/^\/api\/treino(?:\/(config|exemplos|esquecer|exportar\.zip))?$/);
     if (tr) return await treinoRoute(req, res, url, tr[1]);
-    const su = p.match(/^\/api\/suprimentos(?:\/(ler|testar|historico))?$/);
+    const su = p.match(/^\/api\/suprimentos(?:\/(ler|testar|historico|cadastro))?$/);
     if (su) return await suprimentosRoute(req, res, url, su[1]);
     const mo = p.match(/^\/api\/monitor(?:\/(verificar|pausa|historico|quedas|alertas|alerta-teste))?$/);
     if (mo) return await monitorRoute(req, res, url, mo[1]);
