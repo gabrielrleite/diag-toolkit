@@ -216,11 +216,42 @@ async function lerSuprimentos(ip, comunidade = 'public', opc = {}) {
     if (pct != null) estado = pct <= 5 ? 'vazio' : pct <= LIMITE_BAIXO ? 'baixo' : 'ok';
     return { idx: k, desc: ds, cor, item, codigo: codigoDe(ds), classe: cl, tipo: tp, tipoTxt: TIPO_TXT[tp] || '', max: mx, nivel: nv, pct, receptaculo, estado };
   });
-  return {
+  const r = {
     ok: true, versao, ms: Date.now() - t0, lidoEm: new Date().toISOString(),
     modelo: texto([...col(MIB.modelo).values()][0]) || texto([...col(MIB.sysDescr).values()][0]).slice(0, 120),
     serie: texto([...col(MIB.serie).values()][0]), itens,
   };
+  r.equipamento = equipamentoDe(r);
+  return r;
 }
 
-module.exports = { percorrer, sondar, lerSuprimentos, classificar, codigoDe, LIMITE_BAIXO, _ber: { mensagem, decodificar, oid, int, tlv, seq } };
+// ------------------------------------------------------------------ equipamento a partir da leitura
+// marca, modelo, tipo, nº de série, cores e tinta/toner, para preencher o cadastro do SELB
+const MARCAS = [[/^(hewlett[- ]?packard|hp)\b/i, 'HP'], [/^epson\b/i, 'Epson'], [/^ricoh\b/i, 'Ricoh'], [/^brother\b/i, 'Brother'],
+  [/^(kyocera|ecosys)\b/i, 'Kyocera'], [/^lexmark\b/i, 'Lexmark'], [/^samsung\b/i, 'Samsung'], [/^canon\b/i, 'Canon'], [/^xerox\b/i, 'Xerox'],
+  [/^oki(data)?\b/i, 'OKI'], [/^sharp\b/i, 'Sharp'], [/^konica|^minolta|^bizhub\b/i, 'Konica Minolta'], [/^pantum\b/i, 'Pantum'], [/^elgin\b/i, 'Elgin']];
+// multifuncional pelo nome do modelo (MFP, MFC/DCP da Brother, IM/MP da Ricoh, EcoTank L/ET, WorkForce 5xx com centena >= 6)
+const RE_MULTI = /\bMFP\b|\bMFC-|\bDCP-|\bIM\s?C?\d|\bMP\s?C?\d|\bSF\b|\bSFNw?\b|\bET-\d|\bL\d{3,4}\b|\bWF-[CM]?\d[6-9]\d[\dR]\b|\bWF-C?\d{3}[6-9]R?\b|\bM\d{4}[a-z]*fn|multifun|\bbizhub\b|\bTASKalfa\b/i;
+function equipamentoDe(r) {
+  if (!r || !r.ok) return null;
+  let bruto = String(r.modelo || '').replace(/\s+/g, ' ').trim();
+  let marca = '';
+  for (const [re, nome] of MARCAS) if (re.test(bruto)) { marca = nome; bruto = bruto.replace(re, '').trim(); break; }
+  if (!marca) { const m = MARCAS.find(([re]) => re.test(String(r.modelo || '').split(/[;,]/).pop().trim())); if (m) marca = m[1]; }
+  const modelo = bruto.replace(/\b(series|serie|s[eé]rie)\b/ig, '').replace(/^[-:\s]+|[-:\s]+$/g, '').replace(/\s{2,}/g, ' ');
+  const itens = (r.itens || []).filter(i => ['preto', 'azul', 'magenta', 'amarelo'].includes(i.item));
+  const cores = ['preto', 'azul', 'magenta', 'amarelo'].filter(c => itens.some(i => i.item === c));
+  const out = { marca, modelo, serie: String(r.serie || '').trim() };
+  if (!itens.length) return out; // não informou tinta/toner: não chuta cor nem suprimento
+  out.tipo = RE_MULTI.test(`${modelo} ${r.modelo}`) ? 'multifuncional' : 'impressora';
+  out.cor = cores.some(c => c !== 'preto') ? 'colorida' : 'pb';
+  out.cores = out.cor === 'pb' ? ['preto'] : cores;
+  // regra do parque: impressora só preto é de toner; colorida pelo que a impressora informa
+  const toner = itens.some(i => [3, 21].includes(i.tipo) || /toner/i.test(i.desc + ' ' + i.tipoTxt));
+  const tinta = itens.some(i => [5, 6].includes(i.tipo) || /\bink\b|tinta/i.test(i.desc + ' ' + i.tipoTxt));
+  out.suprimento = out.cor === 'pb' ? 'toner' : toner && !tinta ? 'toner' : tinta && !toner ? 'tinta' : '';
+  if (!out.suprimento) delete out.suprimento;
+  return out;
+}
+
+module.exports = { percorrer, sondar, lerSuprimentos, equipamentoDe, classificar, codigoDe, LIMITE_BAIXO, _ber: { mensagem, decodificar, oid, int, tlv, seq } };

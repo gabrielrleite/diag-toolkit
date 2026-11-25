@@ -88,6 +88,19 @@ const brother = [
   assert.deepStrictEqual(await snmp.sondar('127.0.0.1', 'public', { porta: a4.address().port, timeout: 150, repeticoes: 0 }), { versao: 'v1', sysDescr: 'Brother NC-8300w' });
   assert.strictEqual(await snmp.sondar('127.0.0.1', 'outra', { porta: a4.address().port, timeout: 100, repeticoes: 0 }), null);
   a4.close();
+  // equipamento a partir da leitura (preenche o cadastro do SELB)
+  const it = (item, tipo, desc) => ({ item, tipo, desc, tipoTxt: '' });
+  assert.deepStrictEqual(snmp.equipamentoDe(r), { marca: 'Brother', modelo: 'HL-L5100DN', serie: 'E78ABC', tipo: 'impressora', cor: 'pb', cores: ['preto'], suprimento: 'toner' });
+  assert.deepStrictEqual(r.equipamento, snmp.equipamentoDe(r));
+  // só preto = toner (regra do parque), mesmo se a impressora diz tinta
+  assert.strictEqual(snmp.equipamentoDe({ ok: true, modelo: 'EPSON WF-M5299 Series', itens: [it('preto', 6, 'Black Ink')] }).suprimento, 'toner');
+  assert.deepStrictEqual(snmp.equipamentoDe({ ok: true, modelo: 'EPSON WF-C5790 Series', serie: 'X3', itens: ['preto', 'azul', 'magenta', 'amarelo'].map(c => it(c, 6, c + ' ink')) }),
+    { marca: 'Epson', modelo: 'WF-C5790', serie: 'X3', tipo: 'multifuncional', cor: 'colorida', cores: ['preto', 'azul', 'magenta', 'amarelo'], suprimento: 'tinta' });
+  assert.strictEqual(snmp.equipamentoDe({ ok: true, modelo: 'EPSON WF-C5290 Series', itens: [it('preto', 6, 'Black Ink'), it('azul', 6, 'Cyan Ink')] }).tipo, 'impressora');
+  assert.deepStrictEqual(snmp.equipamentoDe({ ok: true, modelo: 'RICOH IM C3000', itens: [it('preto', 21, 'Toner Black'), it('amarelo', 21, 'Toner Yellow')] }).suprimento, 'toner');
+  assert.strictEqual(snmp.equipamentoDe({ ok: true, modelo: 'HP LaserJet Pro MFP M428fdw', itens: [it('preto', 21, 'Black Cartridge')] }).marca, 'HP');
+  assert.deepStrictEqual(snmp.equipamentoDe({ ok: true, modelo: 'Canon iR-ADV C3530', serie: '', itens: [] }), { marca: 'Canon', modelo: 'iR-ADV C3530', serie: '' });
+  assert.strictEqual(snmp.equipamentoDe({ ok: false }), null);
   // classificação por nome/cor
   assert.strictEqual(snmp.classificar('Toner Cyan', '', 3, 3), 'azul');
   assert.strictEqual(snmp.classificar('Cartucho de tinta', 'yellow', 3, 6), 'amarelo');
