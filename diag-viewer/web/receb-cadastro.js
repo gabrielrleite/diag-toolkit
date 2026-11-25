@@ -9,19 +9,88 @@
   Depende de app.js (esc, api, fmt), laudos.js (needServer) e recebimentos.js (RB, RecebOCR).
 */
 
-const CAD = { locais: [], qLocal: '', qSelb: '', soMulti: false, soSemCad: false };
+const CAD = { locais: [], categorias: [], fCat: '', qLocal: '', qSelb: '', soMulti: false, soSemCad: false };
 const nrm = t => RecebOCR.normalizar(t);
 const kSelb = t => RecebOCR.normalizar(t).replace(/ /g, '');
 
 function abasReceb(on) {
   const a = (k, rot, href) => `<a href="${href}" class="${on === k ? 'on' : ''}">${rot}</a>`;
-  return `<nav class="rb-abas">${a('entregas', 'Entregas', '#receb')}${a('locais', 'Locais', '#receb/locais')}${a('selbs', 'SELBs', '#receb/selbs')}${a('impressoras', 'Impressoras', '#receb/impressoras')}${a('suprimentos', 'Suprimentos', '#receb/suprimentos')}${a('treino', 'Treinamento', '#receb/treino')}</nav>`;
+  return `<nav class="rb-abas">${[['entregas', '#receb'], ['locais', '#receb/locais'], ['selbs', '#receb/selbs'], ['impressoras', '#receb/impressoras'], ['suprimentos', '#receb/suprimentos'], ['treino', '#receb/treino'], ['textos', '#receb/textos']]
+    .map(([k, href]) => a(k, esc(Tp('aba.' + k)), href)).join('')}</nav>`;
 }
 
 async function carregarLocais() {
-  const r = await api('api/receb-locais').catch(() => null);
+  const [r, rc] = await Promise.all([api('api/receb-locais').catch(() => null), api('api/receb-locais/categorias').catch(() => null)]);
   CAD.locais = r && r.ok ? await r.json() : [];
+  CAD.categorias = rc && rc.ok ? await rc.json() : [];
   return CAD.locais;
+}
+// ---------------------------------------------------------------- categorias dos locais (personalizáveis)
+const CAT_CORES = ['azul', 'verde', 'ambar', 'vermelho', 'violeta', 'rosa', 'ciano', 'cinza'];
+const CAT_SUGESTOES = ['Escola', 'Unidade de saúde', 'Secretaria', 'Administrativo', 'Almoxarifado'];
+const catPorId = id => id && CAD.categorias.find(c => c.id === id) || null;
+// categoria de um local pelo nome; sala sem categoria usa a do principal
+function categoriaDoLocal(nome) {
+  const L = nome && localCadastrado(nome);
+  if (!L) return null;
+  return catPorId(L.categoria) || (L.pai ? catPorId((CAD.locais.find(x => x.id === L.pai) || {}).categoria) : null);
+}
+const catBadge = (c, herdada = false) => c ? `<span class="cat-tag cat-${esc(c.cor)}" title="Categoria${herdada ? ' (do local principal)' : ''}">${esc(c.nome)}</span>` : '';
+// filtro por categoria ('' = todas, '-' = sem categoria)
+const casaCategoria = (nome, f) => !f || (f === '-' ? !categoriaDoLocal(nome) : (categoriaDoLocal(nome) || {}).id === f);
+const selectCategoria = (id, atual) => `<select id="${id}"><option value="">todas</option>${CAD.categorias.map(c => `<option value="${esc(c.id)}" ${atual === c.id ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}<option value="-" ${atual === '-' ? 'selected' : ''}>sem categoria</option></select>`;
+
+// janela: criar, renomear, colorir e excluir categorias
+function gerenciarCategorias() {
+  return new Promise(resolve => {
+    const d = document.createElement('dialog');
+    d.className = 'dlg dlg-largo';
+    let lista = CAD.categorias.map(c => ({ ...c }));
+    const linha = (c, i) => `<div class="cat-linha" data-i="${i}">
+      <span class="cat-tag cat-${esc(c.cor)}">${esc(c.nome || 'nova')}</span>
+      <input class="cat-nome" value="${esc(c.nome)}" maxlength="60" placeholder="nome da categoria" aria-label="Nome">
+      <div class="cat-cores" role="radiogroup" aria-label="Cor">${CAT_CORES.map(cor => `<button type="button" class="cat-cor cat-${cor} ${c.cor === cor ? 'on' : ''}" data-cor="${cor}" title="${cor}" aria-label="${cor}"></button>`).join('')}</div>
+      <button type="button" class="btn ghost small perigo" data-rem title="Excluir categoria">Excluir</button></div>`;
+    const desenhar = () => {
+      d.innerHTML = `<h2>Categorias de locais</h2>
+        <p class="muted">Agrupe os locais (Escola, Unidade de saúde...). Excluir uma categoria só tira a categoria dos locais.</p>
+        <div class="cat-lista">${lista.map(linha).join('') || '<p class="muted">Nenhuma categoria ainda.</p>'}</div>
+        <div class="filters" style="margin:0"><button type="button" class="btn ghost small" id="catNova">${IC('mais')}Nova categoria</button>
+          ${!lista.length ? `<button type="button" class="btn ghost small" id="catSug">Usar sugestões (${CAT_SUGESTOES.join(', ')})</button>` : ''}</div>
+        <div class="dlg-actions"><button type="button" class="btn ghost" id="catCancelar">Cancelar</button><button type="button" class="btn" id="catSalvar">Salvar categorias</button></div>`;
+      d.querySelectorAll('.cat-linha').forEach(el => {
+        const c = lista[+el.dataset.i];
+        el.querySelector('.cat-nome').addEventListener('input', e => { c.nome = e.target.value; el.querySelector('.cat-tag').textContent = c.nome || 'nova'; });
+        el.querySelectorAll('.cat-cor').forEach(b => b.addEventListener('click', () => { c.cor = b.dataset.cor; desenhar(); }));
+        el.querySelector('[data-rem]').addEventListener('click', () => { lista.splice(+el.dataset.i, 1); desenhar(); });
+      });
+      d.querySelector('#catNova').onclick = () => { lista.push({ nome: '', cor: CAT_CORES[lista.length % CAT_CORES.length] }); desenhar(); d.querySelector('.cat-linha:last-child .cat-nome').focus(); };
+      if (d.querySelector('#catSug')) d.querySelector('#catSug').onclick = () => { lista = CAT_SUGESTOES.map((nome, i) => ({ nome, cor: CAT_CORES[i] })); desenhar(); };
+      d.querySelector('#catCancelar').onclick = () => d.close();
+      d.querySelector('#catSalvar').onclick = async e => {
+        e.target.disabled = true;
+        const r = await api('api/receb-locais/categorias', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(lista.filter(c => c.nome.trim())) }).catch(() => null);
+        if (!r || !r.ok) { e.target.disabled = false; const er = r ? (await r.json().catch(() => ({}))).erro : ''; return alert('Não foi possível salvar: ' + (er || 'servidor indisponível.')); }
+        CAD.categorias = await r.json(); d.salvou = true; d.close();
+      };
+    };
+    document.body.appendChild(d); desenhar(); d.showModal();
+    d.addEventListener('close', () => { d.remove(); resolve(!!d.salvou); });
+  });
+}
+// janela: escolher a categoria para os locais marcados
+function escolherCategoria(n) {
+  return new Promise(resolve => {
+    const d = document.createElement('dialog');
+    d.className = 'dlg';
+    d.innerHTML = `<form method="dialog"><h2>Definir categoria</h2><p>${n} local(is) selecionado(s).</p>
+      <div class="lc-esc">${CAD.categorias.map((c, i) => `<label class="chk"><input type="radio" name="catEsc" value="${esc(c.id)}" ${!i ? 'checked' : ''}> ${catBadge(c)}</label>`).join('')}
+        <label class="chk"><input type="radio" name="catEsc" value="" ${!CAD.categorias.length ? 'checked' : ''}> <span class="muted">sem categoria</span></label></div>
+      <div class="dlg-actions"><button class="btn ghost" value="x">Cancelar</button><button class="btn" value="ok">Aplicar</button></div></form>`;
+    document.body.appendChild(d);
+    d.addEventListener('close', () => { const v = d.querySelector('input[name="catEsc"]:checked').value; d.remove(); resolve(d.returnValue === 'ok' ? v : null); });
+    d.showModal();
+  });
 }
 const enderecoTxt = L => [
   [L.logradouro, L.numero].filter(Boolean).join(', '), L.complemento, L.bairro,
@@ -88,22 +157,25 @@ async function renderLocais(editarId) {
   el.innerHTML = abasReceb('locais') + `
     ${editando ? formLocal(editando) : ''}
     <div class="panel">
-      <div class="head-row"><h2>Locais cadastrados</h2><div class="filters" style="margin:0">
+      <div class="head-row"><h2>${TX('locais.titulo')}</h2><div class="filters" style="margin:0">
+        <button class="btn ghost" id="lcCats" title="Criar, renomear e excluir categorias">${IC('tag')}Categorias</button>
+        <button class="btn ghost" id="lcCategorizar" disabled title="Definir a categoria dos locais marcados">${IC('tag')}Definir categoria</button>
         <button class="btn ghost" id="lcUnificar" disabled title="Marque os locais (salas, blocos...) que ficam dentro de um mesmo local principal">${IC('local')}Unificar selecionados</button>
         <button class="btn" id="lcNovo">Novo local</button></div></div>
-      <p class="muted">Salas, blocos e setores podem ser <b>sublocais</b> de um local principal: marque-os (aqui ou nos locais das entregas, abaixo) e use <b>Unificar selecionados</b>. As entregas continuam com o nome da sala; o principal agrupa tudo nos filtros, nas impressoras e nos alertas.</p>
+      <p class="muted">${TX('locais.ajuda')}</p>
       ${!CAD.locais.length ? vazioHtml('local', 'Nenhum local cadastrado', 'Cadastre com "Novo local" ou a partir dos locais usados nas entregas, abaixo.') : `
-      <div class="filters"><label>Buscar <input type="search" id="lcQ" value="${esc(CAD.qLocal)}" placeholder="nome, endereço, bairro..." style="min-width:260px"></label><span class="muted" id="lcSelN"></span></div>
+      <div class="filters"><label>Buscar <input type="search" id="lcQ" value="${esc(CAD.qLocal)}" placeholder="nome, endereço, bairro..." style="min-width:260px"></label>
+        ${CAD.categorias.length ? `<div class="cat-filtro" role="group" aria-label="Filtrar por categoria">${[['', 'Todas'], ...CAD.categorias.map(c => [c.id, c.nome, c.cor]), ['-', 'Sem categoria']].map(([id, nome, cor]) => `<button type="button" class="cat-chip ${cor ? 'cat-' + cor : ''} ${CAD.fCat === id ? 'on' : ''}" data-fcat="${esc(id)}">${esc(nome)} <small>${id ? CAD.locais.filter(L => !L.pai || !CAD.locais.some(x => x.id === L.pai)).filter(L => casaCategoria(L.nome, id)).length : ''}</small></button>`).join('')}</div>` : ''}</div>
       <div class="tablewrap"><table><thead><tr><th class="nosort" style="width:28px"></th><th class="nosort">Local</th><th class="nosort">Endereço</th><th class="nosort">Entregas</th><th class="nosort"></th></tr></thead><tbody id="lcLista"></tbody></table></div>`}
     </div>
     <div class="panel">
-      <div class="head-row"><h2>Locais usados nas entregas</h2></div>
-      <p class="muted">Nomes como aparecem nas folhas. Leituras erradas do OCR podem ser corrigidas para o nome certo ou apagadas de todas as entregas (a linha volta para conferência).</p>
+      <div class="head-row"><h2>${TX('locais.usados')}</h2></div>
+      <p class="muted">${TX('locais.usadosAjuda')}</p>
       ${!usados.size ? '<p class="muted">Nenhuma entrega com local.</p>' : `
       <div class="tablewrap"><table><thead><tr><th class="nosort" style="width:28px"></th><th class="nosort">Local</th><th class="nosort">Entregas</th><th class="nosort">SELBs</th><th class="nosort">Última</th><th class="nosort"></th></tr></thead><tbody>
       ${[...usados.values()].sort((a, b) => b.n - a.n).map(u => {
         const cad = localCadastrado(u.nome), pr = principalDoLocal(u.nome);
-        return `<tr><td>${cb(u.nome)}</td><td><b>${esc(u.nome)}</b> ${cad ? '<span class="badge ok">cadastrado</span>' : '<span class="badge warn">sem cadastro</span>'}${pr ? `<br><small class="muted">${IC('local')} sala/sublocal de <b>${esc(pr.nome)}</b></small>` : ''}</td>
+        return `<tr><td>${cb(u.nome)}</td><td><b>${esc(u.nome)}</b> ${catBadge(categoriaDoLocal(u.nome))} ${cad ? '<span class="badge ok">cadastrado</span>' : '<span class="badge warn">sem cadastro</span>'}${pr ? `<br><small class="muted">${IC('local')} sala/sublocal de <b>${esc(pr.nome)}</b></small>` : ''}</td>
           <td>${u.n}</td><td><small>${[...u.selbs].slice(0, 8).map(esc).join(', ')}${u.selbs.size > 8 ? '…' : ''}</small></td>
           <td class="t">${u.ult ? esc(u.ult.split('-').reverse().join('/')) : '—'}</td>
           <td class="acoes">${cad ? '' : `<button class="btn ghost small" data-cad="${esc(u.nome)}">Cadastrar</button>`}
@@ -118,7 +190,7 @@ async function renderLocais(editarId) {
     const n = contaNome(L.nome), subs = P ? [] : subsDe(L), nSubs = subs.reduce((a, x) => a + contaNome(x.nome), 0);
     const end = enderecoTxt(L);
     return `<tr class="${P ? 'lc-sub' : subs.length ? 'lc-pai' : ''}"><td>${cb(L.nome)}</td>
-      <td>${P ? '<span class="lc-ramo">└</span>' : ''}<b>${esc(L.nome)}</b>${subs.length ? ` <span class="badge">${subs.length} ${subs.length === 1 ? 'sala' : 'salas'}</span>` : ''}${L.referencia ? `<br><small>${esc(L.referencia)}</small>` : ''}</td>
+      <td>${P ? '<span class="lc-ramo">└</span>' : ''}<b>${esc(L.nome)}</b> ${catBadge(categoriaDoLocal(L.nome), !catPorId(L.categoria))}${subs.length ? ` <span class="badge">${subs.length} ${subs.length === 1 ? 'sala' : 'salas'}</span>` : ''}${L.referencia ? `<br><small>${esc(L.referencia)}</small>` : ''}</td>
       <td>${end ? esc(end) : P && enderecoTxt(P) ? `<span class="muted">${esc(enderecoTxt(P))} (do principal)</span>` : '<span class="muted">sem endereço</span>'}${L.obs ? `<br><small>${esc(L.obs)}</small>` : ''}</td>
       <td>${n ? `<button class="linklike" data-ver="${esc(L.nome)}">${n}</button>` : '0'}${nSubs ? ` <small class="muted" title="entregas nas salas/sublocais">+${nSubs} nas salas</small>` : ''}</td>
       <td class="acoes">${P ? `<button class="btn ghost small" data-solta="${esc(L.id)}" title="Deixa de ser sala de ${esc(P.nome)}">Desvincular</button>` : ''}
@@ -127,6 +199,8 @@ async function renderLocais(editarId) {
   };
   const atualizarSel = () => {
     $('#lcUnificar').disabled = sel.size < 2;
+    $('#lcCategorizar').disabled = !sel.size;
+    $('#lcCategorizar').innerHTML = `${IC('tag')}Definir categoria${sel.size ? ` (${sel.size})` : ''}`;
     $('#lcUnificar').innerHTML = `${IC('local')}Unificar selecionados${sel.size ? ` (${sel.size})` : ''}`;
     el.querySelectorAll('.lc-sel').forEach(c => { c.checked = sel.has(nrm(c.dataset.nome)); });
   };
@@ -140,7 +214,7 @@ async function renderLocais(editarId) {
     const q = nrm(CAD.qLocal);
     const casa = L => nrm([L.nome, enderecoTxt(L), L.referencia].join(' ')).includes(q);
     // principal aparece se ele ou alguma sala casar com a busca; as salas logo abaixo dele
-    box.innerHTML = CAD.locais.filter(raiz).filter(L => !q || casa(L) || subsDe(L).some(casa))
+    box.innerHTML = CAD.locais.filter(raiz).filter(L => (!q || casa(L) || subsDe(L).some(casa)) && casaCategoria(L.nome, CAD.fCat))
       .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
       .map(L => linhaLocal(L) + subsDe(L).filter(x => !q || casa(L) || casa(x)).map(x => linhaLocal(x, L)).join('')).join('');
     box.querySelectorAll('[data-ver]').forEach(b => b.addEventListener('click', () => { RB.fLocal = b.dataset.ver; RB.fSelb = ''; RB.q = ''; location.hash = 'receb'; }));
@@ -161,6 +235,19 @@ async function renderLocais(editarId) {
     ligarSel(box); atualizarSel();
   };
   $('#lcNovo').addEventListener('click', () => { location.hash = 'receb/locais~novo'; });
+  $('#lcCats').addEventListener('click', async () => { if (await gerenciarCategorias()) renderLocais(editarId); });
+  el.querySelectorAll('[data-fcat]').forEach(b => b.addEventListener('click', () => {
+    CAD.fCat = b.dataset.fcat; el.querySelectorAll('[data-fcat]').forEach(x => x.classList.toggle('on', x === b)); desenharCad();
+  }));
+  $('#lcCategorizar').addEventListener('click', async () => {
+    if (!CAD.categorias.length) { if (!(await gerenciarCategorias()) || !CAD.categorias.length) return; }
+    const cat = await escolherCategoria(sel.size);
+    if (cat === null) return;
+    const nomes = [...sel].map(k => (CAD.selNomes || {})[k] || (CAD.locais.find(L => nrm(L.nome) === k) || {}).nome || k);
+    const r = await api('api/receb-locais/categorizar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nomes, categoria: cat }) }).catch(() => null);
+    if (!r || !r.ok) { const er = r ? (await r.json().catch(() => ({}))).erro : ''; return alert('Não foi possível aplicar: ' + (er || 'servidor indisponível.')); }
+    sel.clear(); renderLocais(editarId);
+  });
   $('#lcUnificar').addEventListener('click', async () => {
     const nomes = [...sel].map(k => (CAD.selNomes || {})[k] || (CAD.locais.find(L => nrm(L.nome) === k) || {}).nome || k);
     const r = await escolherPrincipal(nomes, nomesSug);
@@ -224,7 +311,9 @@ function formLocal(L) {
     <div class="head-row"><h2>${L.id ? 'Editar local' : 'Novo local'}</h2></div>
     <div class="rep-grid">
       <label class="full">Nome do local (como aparece nas folhas) <input id="lfNome" value="${v('nome')}" maxlength="160" required></label>
-      <label class="full">Sala / sublocal de <select id="lfPai"><option value="">— nenhum: é um local principal —</option>
+      <label>Categoria <select id="lfCategoria"><option value="">— sem categoria${L.pai ? ' (usa a do principal)' : ''} —</option>
+        ${CAD.categorias.map(c => `<option value="${esc(c.id)}" ${L.categoria === c.id ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></label>
+      <label>Sala / sublocal de <select id="lfPai"><option value="">— nenhum: é um local principal —</option>
         ${CAD.locais.filter(x => !x.pai && x.id !== L.id).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')).map(x => `<option value="${esc(x.id)}" ${L.pai === x.id ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></label>
       <label>CEP <input id="lfCep" value="${v('cep')}" maxlength="9" inputmode="numeric" placeholder="00000-000"></label>
       <label class="full">Logradouro <input id="lfLogradouro" value="${v('logradouro')}" maxlength="200" placeholder="Rua, avenida..."></label>
@@ -246,7 +335,7 @@ function ligarFormLocal(L) {
   $('#lfCep').addEventListener('input', e => { const d = e.target.value.replace(/\D/g, '').slice(0, 8); e.target.value = d.length > 5 ? d.slice(0, 5) + '-' + d.slice(5) : d; });
   $('#lfSalvar').addEventListener('click', async e => {
     const corpo = {};
-    for (const k of ['nome', 'cep', 'logradouro', 'numero', 'complemento', 'bairro', 'cidade', 'uf', 'referencia', 'obs', 'pai']) corpo[k] = $('#lf' + k[0].toUpperCase() + k.slice(1)).value.trim();
+    for (const k of ['nome', 'cep', 'logradouro', 'numero', 'complemento', 'bairro', 'cidade', 'uf', 'referencia', 'obs', 'pai', 'categoria']) corpo[k] = $('#lf' + k[0].toUpperCase() + k.slice(1)).value.trim();
     if (!corpo.nome) { alert('Informe o nome do local.'); return $('#lfNome').focus(); }
     e.target.disabled = true;
     const r = await api('api/receb-locais' + (L.id ? '/' + L.id : ''), { method: L.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }).catch(() => null);
@@ -284,7 +373,7 @@ async function renderSelbs(editar = '') {
   el.innerHTML = abasReceb('selbs') + `
     ${editando ? formSelb(editando, mapa.get(kSelb(editando.selb || ''))) : ''}
     <div class="panel">
-      <div class="head-row"><h2>SELBs</h2><div class="filters" style="margin:0">
+      <div class="head-row"><h2>${TX('selbs.titulo')}</h2><div class="filters" style="margin:0">
         <button class="btn ghost" id="sbRede" title="Marca, modelo, nº de série, tipo, cores e tinta/toner lidos das impressoras com IP">${IC('impressora')}Completar pela rede</button>
         <button class="btn ghost" id="sbPing" title="Pinga agora as impressoras com IP">${IC('raio')}Verificar impressoras</button>
         <a class="btn" href="#receb/selbs~novo">${IC('mais')}Cadastrar SELB</a></div></div>
@@ -294,8 +383,7 @@ async function renderSelbs(editar = '') {
         ${statHtml(totItens, 'tintas, toners e caixas entregues', 'caixa', 'violeta')}
         ${statHtml(multi, 'com mais de um local', 'local', multi ? 'bad' : '')}
       </div>
-      <p class="muted">Cada SELB é uma impressora ou scanner. No cadastro ficam o equipamento, se é colorida ou preto, o IP, se usa <b>tinta ou toner</b>, as cores, a caixa de manutenção e os <b>códigos dos suprimentos</b> (observação).
-        SELB raramente muda de lugar: mais de um local costuma ser leitura errada (use <b>usar em todas</b> no local certo).</p>
+      <p class="muted">${TX('selbs.ajuda')}</p>
       <div class="filters"><label>Buscar <input type="search" id="sbQ" value="${esc(CAD.qSelb)}" placeholder="SELB, local, marca, modelo, IP, código" style="min-width:260px"></label>
         <label class="chk"><input type="checkbox" id="sbMulti" ${CAD.soMulti ? 'checked' : ''}> só com mais de um local</label>
         <label class="chk"><input type="checkbox" id="sbSemCad" ${CAD.soSemCad ? 'checked' : ''}> só sem cadastro</label><span class="muted" id="sbN"></span></div>
@@ -556,7 +644,7 @@ async function renderTreino() {
   const zipUrl = `api/treino/exportar.zip${srv.token ? '?token=' + encodeURIComponent(srv.token) : ''}`;
   el.innerHTML = abasReceb('treino') + `
     <div class="panel">
-      <div class="head-row"><h2>Modo treinamento</h2>
+      <div class="head-row"><h2>${TX('treino.titulo')}</h2>
         <label class="rb-switch"><input type="checkbox" id="trAtivo" ${T.ativo ? 'checked' : ''}><span></span><b>${T.ativo ? 'Ligado' : 'Desligado'}</b></label></div>
       <p class="muted">Com o modo ligado, cada linha <b>conferida</b> ensina o sistema: o que o OCR leu em Local, SELB e Data é comparado com o texto final.
         Leituras que já foram corrigidas da mesma forma passam a ser corrigidas sozinhas na próxima folha (com aviso, e dá para voltar ao lido).

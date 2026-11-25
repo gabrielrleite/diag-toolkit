@@ -195,7 +195,7 @@ function desenharSuprStatus() {
 }
 
 // ================================================================== Recebimentos › Suprimentos (resumo de todas)
-const SR = { q: '', filtro: 'todas', ordem: 'nivel' };
+const SR = { q: '', filtro: 'todas', ordem: 'nivel', cat: '' };
 const ORDEM_SUP = ['preto', 'azul', 'magenta', 'amarelo', 'caixa'];
 // menor nível entre tintas/toners e caixa (para ordenar; sem leitura vai para o fim)
 const menorNivel = s => s && s.ok ? Math.min(101, ...s.itens.filter(i => i.item !== 'outro' && i.pct != null).map(i => i.pct)) : 102;
@@ -211,7 +211,7 @@ function cartaoSup(i) {
   return `<article class="sr-card ${pior}" data-imp="${esc(i.selb)}" tabindex="0">
     <header><div class="sr-tit">${situacaoHtml(i.ip)}<b>${esc(i.selb)}</b><span class="muted">${esc(nomeImp(i))}</span></div>
       ${pior ? `<span class="badge ${pior}">${al.length === 1 ? '1 alerta' : al.length + ' alertas'}</span>` : ''}</header>
-    <small class="sr-local">${i.local ? esc(localImp(i)) : '<span class="muted">sem local</span>'}</small>
+    <small class="sr-local">${i.local ? catBadge(categoriaDoLocal(i.local)) + ' ' + esc(localImp(i)) : '<span class="muted">sem local</span>'}</small>
     ${scanner ? '<p class="muted sr-msg">Scanner: sem tinta/toner.</p>'
       : !s ? '<p class="muted sr-msg">Ainda não lida.</p>'
       : !s.ok ? `<p class="sr-msg"><span class="badge">sem leitura</span> <small class="muted">${esc(s.erro || '')}</small></p>`
@@ -223,7 +223,7 @@ async function renderSuprimentosResumo() {
   const el = $('#mod-receb');
   el.innerHTML = abasReceb('suprimentos') + '<div class="panel">Carregando...</div>';
   if (!(await needServer(el))) return;
-  await Promise.all([atualizarMonitor(), carregarSelbsCad()]);
+  await Promise.all([atualizarMonitor(), carregarSelbsCad(), carregarLocais()]);
   const D = MON.dados;
   if (!D) { el.innerHTML = abasReceb('suprimentos') + '<div class="panel"><p class="err">Não foi possível carregar as impressoras.</p></div>'; return; }
   const imps = D.impressoras;
@@ -242,7 +242,7 @@ async function renderSuprimentosResumo() {
   const compras = [...compra.values()].sort((a, b) => b.trocar - a.trocar || b.selbs.length - a.selbs.length || ORDEM_SUP.indexOf(a.item) - ORDEM_SUP.indexOf(b.item));
   el.innerHTML = abasReceb('suprimentos') + `
     <div class="panel">
-      <div class="head-row"><h2>Tinta, toner e caixa de manutenção</h2><div class="filters" style="margin:0">
+      <div class="head-row"><h2>${TX('suprimentos.titulo')}</h2><div class="filters" style="margin:0">
         <small class="muted">${SUP.dados && SUP.dados.rodada ? `leitura automática a cada ${SUP.dados.horas} h · última ${haQuanto(SUP.dados.rodada)}` : ''}</small>
         <button class="btn ghost small" id="srLer">${IC('caixa')}Ler todas agora</button></div></div>
       <div class="stats">
@@ -251,7 +251,7 @@ async function renderSuprimentosResumo() {
         ${statHtml(trocar.length, 'com item para trocar (5% ou menos)', 'alerta', trocar.length ? 'bad' : '')}
         ${statHtml(semLeitura.length, 'sem leitura', 'relogio', '')}
       </div>
-      ${compras.length ? `<h3 class="sr-h3">Para comprar / separar</h3>
+      ${compras.length ? `<h3 class="sr-h3">${TX('suprimentos.compras')}</h3>
       <div class="tablewrap"><table><thead><tr><th class="nosort">Código</th><th class="nosort">Item</th><th class="nosort">Impressoras</th><th class="nosort t">Qtd.</th></tr></thead><tbody>
       ${compras.map(g => `<tr><td class="mono"><b>${esc(g.cod || '—')}</b>${g.cod ? '' : ` <small class="muted">sem código no cadastro</small>`}</td>
         <td><span class="sr-item"><span class="it-bola it-${g.item}">${g.item === 'caixa' ? IC('caixa') : ''}</span><span>${esc(SUP_NOME[g.item])}<br><small class="muted">${esc(g.modelo)}</small></span></span></td>
@@ -263,16 +263,18 @@ async function renderSuprimentosResumo() {
       <div class="filters">
         <label>Buscar <input type="search" id="srQ" value="${esc(SR.q)}" placeholder="SELB, local, modelo, código" style="min-width:240px"></label>
         <div class="seg2">${[['todas', 'Todas'], ['alerta', 'Com alerta'], ['sem', 'Sem leitura']].map(([v, t]) => `<label class="seg-op"><input type="radio" name="srF" value="${v}" ${SR.filtro === v ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div>
+        ${CAD.categorias.length ? `<label>Categoria ${selectCategoria('srCat', SR.cat)}</label>` : ''}
         <label>Ordenar <select id="srOrdem">${[['nivel', 'menor nível primeiro'], ['selb', 'SELB'], ['local', 'local']].map(([v, t]) => `<option value="${v}" ${SR.ordem === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <span class="muted" id="srN"></span></div>
       <div id="srGrade"></div>
-      <p class="muted"><small>Caixa de manutenção em % de vida útil (100% = nova). n/i = a impressora não informa. * código anotado na observação do SELB.</small></p>
+      <p class="muted"><small>${TX('suprimentos.rodape')}</small></p>
     </div>`;
   const desenhar = () => {
     const q = nrm(SR.q);
     const lista = imps.filter(i => {
       if (SR.filtro === 'alerta' && !alertasSup(supDe(i.selb)).length) return false;
       if (SR.filtro === 'sem' && !semLeitura.includes(i)) return false;
+      if (!casaCategoria(i.local, SR.cat)) return false;
       if (!q) return true;
       const s = supDe(i.selb), c = cadDe(i.selb);
       const cods = s && s.ok ? s.itens.map(x => (codigoSup(x, i.selb) || {}).cod || '') : [];
@@ -292,6 +294,7 @@ async function renderSuprimentosResumo() {
   $('#srQ').addEventListener('input', e => { SR.q = e.target.value; desenhar(); });
   el.querySelectorAll('input[name="srF"]').forEach(r => r.addEventListener('change', () => { SR.filtro = r.value; desenhar(); }));
   $('#srOrdem').addEventListener('change', e => { SR.ordem = e.target.value; desenhar(); });
+  if ($('#srCat')) $('#srCat').addEventListener('change', e => { SR.cat = e.target.value; desenhar(); });
   $('#srLer').addEventListener('click', async e => { const b = e.currentTarget; b.disabled = true; b.textContent = 'Lendo…'; await lerSuprimentosAgora(); renderSuprimentosResumo(); });
 }
 
@@ -325,7 +328,7 @@ async function renderImpressoras(arg = '') {
   const d7 = ativas.filter(i => i.d7 != null), media7 = d7.length ? Math.round(d7.reduce((a, i) => a + i.d7, 0) / d7.length * 10) / 10 : null;
   el.innerHTML = abasReceb('impressoras') + `
     <div class="panel">
-      <div class="head-row"><h2>Monitoramento das impressoras</h2><div class="filters" style="margin:0">
+      <div class="head-row"><h2>${TX('impressoras.titulo')}</h2><div class="filters" style="margin:0">
         ${D.pausa ? `<span class="badge warn">pausado ${esc(ateTxt(D.pausa))}</span><button class="btn small" data-retomar="todos">Retomar</button>` : menuPausa('todos', 'Pausar monitoramento')}
         <button class="btn ghost small" id="impSupr" title="Lê agora tinta/toner e caixa de todas as impressoras (SNMP)">${IC('caixa')}Ler suprimentos</button>
         <button class="btn ghost small" id="impVerificar">${IC('raio')}Verificar agora</button></div></div>
@@ -353,7 +356,7 @@ async function renderImpressoras(arg = '') {
       </tbody></table></div>`}
     </div>
     <div class="panel">
-      <div class="head-row"><h2>Alertas (30 dias)</h2><div class="filters" style="margin:0">
+      <div class="head-row"><h2>${TX('impressoras.alertas')}</h2><div class="filters" style="margin:0">
         ${AL.webhook ? '<span class="badge ok">envio por webhook ativo</span>' : '<span class="badge" title="Defina ALERTA_WEBHOOK na stack para receber os alertas no Teams, Google Chat, Discord ou ntfy">sem envio externo</span>'}
         ${AL.webhook ? `<button class="btn ghost small" id="impAlertaTeste">${IC('raio')}Enviar alerta de teste</button>` : ''}</div></div>
       <p class="muted">Gerado quando tinta/toner ou a vida útil da caixa de manutenção chega a ${LIMITE_SUP}% (e de novo ao chegar a 5%), e quando uma impressora cai ou volta.</p>
@@ -364,7 +367,7 @@ async function renderImpressoras(arg = '') {
       </tbody></table></div>`}
     </div>
     <div class="panel">
-      <div class="head-row"><h2>Histórico de quedas (30 dias)</h2></div>
+      <div class="head-row"><h2>${TX('impressoras.quedas')}</h2></div>
       ${!quedas.length ? vazioHtml('check', 'Nenhuma queda nos últimos 30 dias', '') : `
       <div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Impressora</th><th class="nosort">Caiu em</th><th class="nosort">Voltou em</th><th class="nosort">Tempo fora</th></tr></thead><tbody>
       ${quedas.map(q => `<tr data-imp="${esc(String(q.selb).split(', ')[0])}"><td><b>${esc(q.selb)}</b><br><small class="mono">${esc(q.ip)}</small></td>

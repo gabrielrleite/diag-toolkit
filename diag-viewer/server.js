@@ -527,6 +527,8 @@ async function recebRoute(req, res, url, id) {
 // ------------------------------------------------------------------ cadastro de locais e correção em lote
 const LOCAIS_FILE = path.join(RDIR, 'locais.json');
 const LOCID_RE = /^[0-9a-f]{10}$/;
+const CATID_RE = /^[0-9a-f]{8}$/;
+const CAT_CORES = ['azul', 'verde', 'ambar', 'vermelho', 'violeta', 'rosa', 'ciano', 'cinza'];
 const normRec = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
 const chaveSelbRec = t => normRec(t).replace(/ /g, '');
 async function lerLocais() { try { return JSON.parse(await fsp.readFile(LOCAIS_FILE, 'utf8')); } catch { return { locais: [], removidos: [] }; } }
@@ -537,6 +539,7 @@ function sanitizeLocal(b) {
     bairro: t('bairro', 120), cidade: t('cidade', 120), uf: t('uf', 2).toUpperCase().replace(/[^A-Z]/g, ''),
     cep: t('cep', 9).replace(/[^\d-]/g, ''), referencia: t('referencia', 300), obs: txt(b && b.obs, 1000),
     pai: LOCID_RE.test(t('pai', 10)) ? t('pai', 10) : '', // sublocal (sala, bloco...) de um local principal
+    categoria: CATID_RE.test(t('categoria', 8)) ? t('categoria', 8) : '', // categoria personalizada (Escola, UBS...)
   };
 }
 // sublocal: um nível só. O principal não pode ser sublocal; quem vira sublocal passa os seus sublocais para o novo principal
@@ -553,6 +556,8 @@ async function locaisRoute(req, res, url, id) {
   if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
   const ip = ipOf(req);
   if (id === 'unificar') return unificarLocais(req, res, ip);
+  if (id === 'categorias') return categoriasRoute(req, res, ip);
+  if (id === 'categorizar') return categorizarLocais(req, res, ip);
   if (id && !LOCID_RE.test(id)) { req.resume(); return json(res, 400, { erro: 'id de local inválido' }); }
   if (req.method === 'GET' && !id) return json(res, 200, (await lerLocais()).locais);
   let body = {};
@@ -568,6 +573,7 @@ async function locaisRoute(req, res, url, id) {
       if (!L.nome) return { code: 400, erro: 'Informe o nome do local.' };
       if (dup(L.nome)) return { code: 409, erro: `Já existe o local "${dup(L.nome).nome}".` };
       const ep = ajustarPai(db, L, ''); if (ep) return { code: 400, erro: ep };
+      if (L.categoria && !(db.categorias || []).some(c => c.id === L.categoria)) L.categoria = '';
       const novo = { id: crypto.randomBytes(5).toString('hex'), ...L, criadoEm: agora, atualizadoEm: agora };
       db.locais.push(novo); await writeJsonAtomic(LOCAIS_FILE, db);
       return { code: 201, obj: novo, audit: { acao: 'local_cadastrado', local: novo.id, nome: novo.nome } };
@@ -579,6 +585,7 @@ async function locaisRoute(req, res, url, id) {
       if (!L.nome) return { code: 400, erro: 'Informe o nome do local.' };
       if (dup(L.nome, id)) return { code: 409, erro: `Já existe o local "${dup(L.nome, id).nome}".` };
       const ep = ajustarPai(db, L, id); if (ep) return { code: 400, erro: ep };
+      if (L.categoria && !(db.categorias || []).some(c => c.id === L.categoria)) L.categoria = '';
       db.locais[i] = { ...db.locais[i], ...L, atualizadoEm: agora };
       await writeJsonAtomic(LOCAIS_FILE, db);
       return { code: 200, obj: db.locais[i], audit: { acao: 'local_alterado', local: id, nome: L.nome } };
@@ -595,6 +602,74 @@ async function locaisRoute(req, res, url, id) {
   });
   if (out.audit) await audit({ ...out.audit, ip });
   return json(res, out.code, out.erro ? { erro: out.erro } : out.obj);
+}
+
+// categorias dos locais (personalizáveis): GET lista; PUT grava a lista inteira [{id?, nome, cor}].
+// Categoria removida sai dos locais que a usavam.
+async function categoriasRoute(req, res, ip) {
+  if (req.method === 'GET') return json(res, 200, (await lerLocais()).categorias || []);
+  if (req.method !== 'PUT') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+  let b; try { b = await readJsonBody(req, 50000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+  const lista = (Array.isArray(b) ? b : Array.isArray(b && b.categorias) ? b.categorias : []).slice(0, 100);
+  const out = await withLock('receb-locais', async () => {
+    const db = await lerLocais(), novas = [];
+    for (const c of lista) {
+      const nome = txt(c && c.nome, 60).replace(/[\r\n\t]+/g, ' ').trim();
+      if (!nome) continue;
+      if (novas.some(x => normRec(x.nome) === normRec(nome))) return { erro: `Categoria repetida: "${nome}".` };
+      const id = CATID_RE.test(c.id) && (db.categorias || []).some(x => x.id === c.id) ? c.id : crypto.randomBytes(4).toString('hex');
+      novas.push({ id, nome, cor: CAT_CORES.includes(c.cor) ? c.cor : CAT_CORES[novas.length % CAT_CORES.length] });
+    }
+    const ids = new Set(novas.map(c => c.id));
+    let limpos = 0;
+    for (const l of db.locais) if (l.categoria && !ids.has(l.categoria)) { l.categoria = ''; limpos++; }
+    db.categorias = novas;
+    await writeJsonAtomic(LOCAIS_FILE, db);
+    return { categorias: novas, limpos };
+  });
+  if (out.erro) return json(res, 400, { erro: out.erro });
+  await audit({ acao: 'locais_categorias', categorias: out.categorias.map(c => c.nome), ip });
+  return json(res, 200, out.categorias);
+}
+// define a categoria de vários locais de uma vez (nomes sem cadastro são cadastrados)
+async function categorizarLocais(req, res, ip) {
+  if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+  let b; try { b = await readJsonBody(req, 50000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+  const nomes = [...new Set((Array.isArray(b.nomes) ? b.nomes : []).map(v => txt(v, 160).replace(/[\r\n\t]+/g, ' ').trim()).filter(Boolean))].slice(0, 500);
+  const cat = txt(b.categoria, 8);
+  if (!nomes.length) return json(res, 400, { erro: 'Selecione ao menos um local.' });
+  const out = await withLock('receb-locais', async () => {
+    const db = await lerLocais(), agora = new Date().toISOString();
+    if (cat && !(db.categorias || []).some(c => c.id === cat)) return { erro: 'Categoria não encontrada.' };
+    for (const nome of nomes) {
+      let L = db.locais.find(l => normRec(l.nome) === normRec(nome));
+      if (!L) { L = { id: crypto.randomBytes(5).toString('hex'), ...sanitizeLocal({ nome }), criadoEm: agora }; db.locais.push(L); }
+      L.categoria = cat; L.atualizadoEm = agora;
+    }
+    await writeJsonAtomic(LOCAIS_FILE, db);
+    return { n: nomes.length };
+  });
+  if (out.erro) return json(res, 400, { erro: out.erro });
+  await audit({ acao: 'locais_categorizados', categoria: cat, nomes, ip });
+  return json(res, 200, out);
+}
+
+// textos da aba Recebimentos e submenus (títulos, abas, ajudas) personalizados; vazio = texto padrão
+const TEXTOS_FILE = path.join(RDIR, 'textos.json');
+async function textosRoute(req, res, url) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  if (req.method === 'GET') { try { return json(res, 200, JSON.parse(await fsp.readFile(TEXTOS_FILE, 'utf8'))); } catch { return json(res, 200, {}); } }
+  if (req.method !== 'PUT') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+  let b; try { b = await readJsonBody(req, 100000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+  const out = {};
+  for (const [k, v] of Object.entries(b && typeof b === 'object' ? b : {}).slice(0, 200)) {
+    if (!/^[a-z]+\.[a-zA-Z]+$/.test(k) || k.length > 60 || typeof v !== 'string') continue;
+    const t = v.replace(/\r/g, '').trim().slice(0, 1000);
+    if (t) out[k] = t;
+  }
+  await writeJsonAtomic(TEXTOS_FILE, out);
+  await audit({ acao: 'recebimentos_textos', chaves: Object.keys(out), ip: ipOf(req) });
+  return json(res, 200, out);
 }
 
 // unificar: os locais escolhidos viram sublocais (salas, blocos...) de um local principal.
@@ -1853,6 +1928,7 @@ const server = http.createServer(async (req, res) => {
     if (mo) return await monitorRoute(req, res, url, mo[1]);
     const sc = p.match(/^\/api\/receb-selbs(?:\/([^/]+))?$/);
     if (sc) return await selbsRoute(req, res, url, sc[1]);
+    if (p === '/api/receb-textos') return await textosRoute(req, res, url);
     const lc = p.match(/^\/api\/receb-locais(?:\/([^/]+))?$/);
     if (lc) return await locaisRoute(req, res, url, lc[1]);
     const rr = p.match(/^\/api\/recebimentos(?:\/([^/]+))?$/);
