@@ -486,7 +486,8 @@ async function renderSelbs(editar = '') {
       <p class="muted">${TX('selbs.ajuda')}</p>
       <div class="filters"><label>Buscar <input type="search" id="sbQ" value="${esc(CAD.qSelb)}" placeholder="SELB, local, marca, modelo, IP, código" style="min-width:260px"></label>
         <label class="chk"><input type="checkbox" id="sbMulti" ${CAD.soMulti ? 'checked' : ''}> só com mais de um local</label>
-        <label class="chk"><input type="checkbox" id="sbSemCad" ${CAD.soSemCad ? 'checked' : ''}> só sem cadastro</label><span class="muted" id="sbN"></span></div>
+        <label class="chk"><input type="checkbox" id="sbSemCad" ${CAD.soSemCad ? 'checked' : ''}> só sem cadastro</label>
+        <label class="chk" title="Sem local vinculado no cadastro e sem local nas entregas"><input type="checkbox" id="sbSemLocal" ${CAD.soSemLocal ? 'checked' : ''}> só sem local <small class="muted">(${selbs.filter(x => !x.locais.size && !(cadSelb(x.selb) || {}).local).length})</small></label><span class="muted" id="sbN"></span></div>
       <div id="sbLista"></div>
     </div>`;
   const desenhar = () => {
@@ -495,6 +496,7 @@ async function renderSelbs(editar = '') {
       const c = cadSelb(s.selb);
       if (CAD.soMulti && s.locais.size <= 1) return false;
       if (CAD.soSemCad && c) return false;
+      if (CAD.soSemLocal && (s.locais.size || (c && c.local))) return false;
       return !q || kSelb(s.selb).includes(qk) || [...s.locais.values()].some(o => nrm(o.nome).includes(q)) || (c && nrm([c.marca, c.modelo, c.serie, c.ip, c.obs, c.local].join(' ')).includes(q));
     });
     $('#sbN').textContent = `${lista.length} de ${selbs.length}`;
@@ -571,6 +573,7 @@ async function renderSelbs(editar = '') {
   $('#sbQ').addEventListener('input', e => { CAD.qSelb = e.target.value; desenhar(); });
   $('#sbMulti').addEventListener('change', e => { CAD.soMulti = e.target.checked; desenhar(); });
   $('#sbSemCad').addEventListener('change', e => { CAD.soSemCad = e.target.checked; desenhar(); });
+  $('#sbSemLocal').addEventListener('change', e => { CAD.soSemLocal = e.target.checked; desenhar(); });
   if (editando) ligarFormSelb(editando);
   desenhar();
 }
