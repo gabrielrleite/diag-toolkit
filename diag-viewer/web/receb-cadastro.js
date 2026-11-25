@@ -165,6 +165,7 @@ async function renderLocais(editarId) {
       <p class="muted">${TX('locais.ajuda')}</p>
       ${!CAD.locais.length ? vazioHtml('local', 'Nenhum local cadastrado', 'Cadastre com "Novo local" ou a partir dos locais usados nas entregas, abaixo.') : `
       <div class="filters"><label>Buscar <input type="search" id="lcQ" value="${esc(CAD.qLocal)}" placeholder="nome, endereço, bairro..." style="min-width:260px"></label>
+        <label>Mostrar <select id="lcMostra">${FILTROS_CAD.map(([v, t]) => `<option value="${v}" ${(CAD.fMostra || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label><span class="muted" id="lcN"></span>
         ${CAD.categorias.length ? `<div class="cat-filtro" role="group" aria-label="Filtrar por categoria">${[['', 'Todas'], ...CAD.categorias.map(c => [c.id, c.nome, c.cor]), ['-', 'Sem categoria']].map(([id, nome, cor]) => `<button type="button" class="cat-chip ${cor ? 'cat-' + cor : ''} ${CAD.fCat === id ? 'on' : ''}" data-fcat="${esc(id)}">${esc(nome)} <small>${id ? CAD.locais.filter(L => !L.pai || !CAD.locais.some(x => x.id === L.pai)).filter(L => casaCategoria(L.nome, id)).length : ''}</small></button>`).join('')}</div>` : ''}</div>
       <div class="tablewrap"><table><thead><tr><th class="nosort" style="width:28px"></th><th class="nosort">Local</th><th class="nosort">Endereço</th><th class="nosort">Entregas</th><th class="nosort"></th></tr></thead><tbody id="lcLista"></tbody></table></div>`}
     </div>
@@ -172,16 +173,11 @@ async function renderLocais(editarId) {
       <div class="head-row"><h2>${TX('locais.usados')}</h2></div>
       <p class="muted">${TX('locais.usadosAjuda')}</p>
       ${!usados.size ? '<p class="muted">Nenhuma entrega com local.</p>' : `
-      <div class="tablewrap"><table><thead><tr><th class="nosort" style="width:28px"></th><th class="nosort">Local</th><th class="nosort">Entregas</th><th class="nosort">SELBs</th><th class="nosort">Última</th><th class="nosort"></th></tr></thead><tbody>
-      ${[...usados.values()].sort((a, b) => b.n - a.n).map(u => {
-        const cad = localCadastrado(u.nome), pr = principalDoLocal(u.nome);
-        return `<tr><td>${cb(u.nome)}</td><td><b>${esc(u.nome)}</b> ${catBadge(categoriaDoLocal(u.nome))} ${cad ? '<span class="badge ok">cadastrado</span>' : '<span class="badge warn">sem cadastro</span>'}${pr ? `<br><small class="muted">${IC('local')} sala/sublocal de <b>${esc(pr.nome)}</b></small>` : ''}</td>
-          <td>${u.n}</td><td><small>${[...u.selbs].slice(0, 8).map(esc).join(', ')}${u.selbs.size > 8 ? '…' : ''}</small></td>
-          <td class="t">${u.ult ? esc(u.ult.split('-').reverse().join('/')) : '—'}</td>
-          <td class="acoes">${cad ? '' : `<button class="btn ghost small" data-cad="${esc(u.nome)}">Cadastrar</button>`}
-            <button class="btn ghost small" data-corr="${esc(u.nome)}">Corrigir para…</button>
-            <button class="btn ghost small perigo" data-apagar="${esc(u.nome)}">Apagar</button></td></tr>`;
-      }).join('')}</tbody></table></div>`}
+      <div class="filters"><label>Buscar <input type="search" id="luQ" value="${esc(CAD.qUsado || '')}" placeholder="nome do local, SELB..." style="min-width:220px"></label>
+        <label>Mostrar <select id="luMostra">${FILTROS_USADOS.map(([v, t, f]) => `<option value="${v}" ${(CAD.fUsado || '') === v ? 'selected' : ''}>${t}${v ? ` (${[...usados.values()].filter(f).length})` : ''}</option>`).join('')}</select></label>
+        <span class="muted" id="luN"></span>
+        <button class="btn ghost small" id="luCadTodos" hidden>${IC('mais')}Cadastrar os sem cadastro</button></div>
+      <div class="tablewrap"><table><thead><tr><th class="nosort" style="width:28px"></th><th class="nosort">Local</th><th class="nosort">Entregas</th><th class="nosort">SELBs</th><th class="nosort">Última</th><th class="nosort"></th></tr></thead><tbody id="lcUsados"></tbody></table></div>`}
     </div>`;
   const contaNome = nome => [...usados.values()].filter(u => nrm(u.nome) === nrm(nome)).reduce((a, u) => a + u.n, 0);
   const vincDe = L => [...RB.selbsCad.values()].filter(c => c.local && nrm(c.local) === nrm(L.nome)).map(c => c.selb);
@@ -214,10 +210,27 @@ async function renderLocais(editarId) {
     const box = $('#lcLista'); if (!box) return;
     const q = nrm(CAD.qLocal);
     const casa = L => nrm([L.nome, enderecoTxt(L), L.referencia].join(' ')).includes(q);
-    // principal aparece se ele ou alguma sala casar com a busca; as salas logo abaixo dele
-    box.innerHTML = CAD.locais.filter(raiz).filter(L => (!q || casa(L) || subsDe(L).some(casa)) && casaCategoria(L.nome, CAD.fCat))
-      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
-      .map(L => linhaLocal(L) + subsDe(L).filter(x => !q || casa(L) || casa(x)).map(x => linhaLocal(x, L)).join('')).join('');
+    const fm = CAD.fMostra || '';
+    const paiDe = L => CAD.locais.find(x => x.id === L.pai) || null;
+    const testa = {
+      semend: L => !enderecoTxt(L) && !(paiDe(L) && enderecoTxt(paiDe(L))), semcat: L => !categoriaDoLocal(L.nome), comsalas: L => subsDe(L).length > 0,
+      sala: L => !raiz(L), sement: L => !contaNome(L.nome), vinc: L => vincDe(L).length > 0, semvinc: L => !vincDe(L).length,
+    }[fm];
+    let html, n;
+    if (testa) {
+      // filtro ativo: lista plana (salas mostram o principal)
+      const lista = CAD.locais.filter(L => testa(L) && (!q || casa(L)) && casaCategoria(L.nome, CAD.fCat)).sort((a, b) => localComPrincipal(a.nome).localeCompare(localComPrincipal(b.nome), 'pt-BR'));
+      n = lista.length;
+      html = lista.map(L => linhaLocal(L, raiz(L) ? null : paiDe(L))).join('');
+    } else {
+      // principal aparece se ele ou alguma sala casar com a busca; as salas logo abaixo dele
+      const raizes = CAD.locais.filter(raiz).filter(L => (!q || casa(L) || subsDe(L).some(casa)) && casaCategoria(L.nome, CAD.fCat))
+        .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+      n = raizes.length;
+      html = raizes.map(L => linhaLocal(L) + subsDe(L).filter(x => !q || casa(L) || casa(x)).map(x => linhaLocal(x, L)).join('')).join('');
+    }
+    box.innerHTML = html || `<tr><td colspan="5" class="muted">Nenhum local com esse filtro.</td></tr>`;
+    $('#lcN').textContent = `${n} local(is)`;
     box.querySelectorAll('[data-ver]').forEach(b => b.addEventListener('click', () => { RB.fLocal = b.dataset.ver; RB.fSelb = ''; RB.q = ''; location.hash = 'receb'; }));
     box.querySelectorAll('[data-excluir]').forEach(b => b.addEventListener('click', async () => {
       const L = CAD.locais.find(x => x.id === b.dataset.excluir);
@@ -261,25 +274,80 @@ async function renderLocais(editarId) {
     renderLocais();
   });
   if ($('#lcQ')) $('#lcQ').addEventListener('input', e => { CAD.qLocal = e.target.value; desenharCad(); });
-  ligarSel(el.querySelectorAll('.panel')[editando ? 2 : 1]);
-  el.querySelectorAll('[data-cad]').forEach(b => b.addEventListener('click', () => { CAD.novoNome = b.dataset.cad; location.hash = 'receb/locais~novo'; }));
-  el.querySelectorAll('[data-corr]').forEach(b => b.addEventListener('click', async () => {
+  if ($('#lcMostra')) $('#lcMostra').addEventListener('change', e => { CAD.fMostra = e.target.value; desenharCad(); });
+  // locais usados nas entregas: busca + filtro "Mostrar"
+  const desenharUsados = () => {
+    const box = $('#lcUsados'); if (!box) return;
+    const q = nrm(CAD.qUsado || ''), f = (FILTROS_USADOS.find(x => x[0] === (CAD.fUsado || '')) || FILTROS_USADOS[0])[2];
+    const lista = [...usados.values()].filter(u => f(u) && (!q || nrm([u.nome, localComPrincipal(u.nome), ...u.selbs].join(' ')).includes(q))).sort((a, b) => b.n - a.n);
+    $('#luN').textContent = `${lista.length} de ${usados.size}`;
+    const semCad = lista.filter(u => !localCadastrado(u.nome));
+    $('#luCadTodos').hidden = !semCad.length;
+    $('#luCadTodos').innerHTML = `${IC('mais')}Cadastrar os sem cadastro (${semCad.length})`;
+    box.innerHTML = lista.map(u => {
+      const cad = localCadastrado(u.nome), pr = principalDoLocal(u.nome);
+      return `<tr><td>${cb(u.nome)}</td><td><b>${esc(u.nome)}</b> ${catBadge(categoriaDoLocal(u.nome))} ${cad ? '<span class="badge ok">cadastrado</span>' : '<span class="badge warn">sem cadastro</span>'}${pr ? `<br><small class="muted">${IC('local')} sala/sublocal de <b>${esc(pr.nome)}</b></small>` : ''}</td>
+        <td>${u.n}</td><td><small>${[...u.selbs].slice(0, 8).map(esc).join(', ')}${u.selbs.size > 8 ? '…' : ''}</small></td>
+        <td class="t">${u.ult ? esc(u.ult.split('-').reverse().join('/')) : '—'}</td>
+        <td class="acoes">${cad ? '' : `<button class="btn ghost small" data-cad="${esc(u.nome)}">Cadastrar</button>`}
+          <button class="btn ghost small" data-corr="${esc(u.nome)}">Corrigir para…</button>
+          <button class="btn ghost small perigo" data-apagar="${esc(u.nome)}">Apagar</button></td></tr>`;
+    }).join('') || `<tr><td colspan="6" class="muted">Nenhum local com esse filtro.</td></tr>`;
+    ligarSel(box); atualizarSel();
+    ligarUsados(box);
+  };
+  if ($('#luQ')) {
+    $('#luQ').addEventListener('input', e => { CAD.qUsado = e.target.value; desenharUsados(); });
+    $('#luMostra').addEventListener('change', e => { CAD.fUsado = e.target.value; desenharUsados(); });
+    $('#luCadTodos').addEventListener('click', async e => {
+      const q = nrm(CAD.qUsado || ''), f = (FILTROS_USADOS.find(x => x[0] === (CAD.fUsado || '')) || FILTROS_USADOS[0])[2];
+      const nomes = [...usados.values()].filter(u => f(u) && !localCadastrado(u.nome) && (!q || nrm([u.nome, ...u.selbs].join(' ')).includes(q))).map(u => u.nome);
+      if (!nomes.length || !confirm(`Cadastrar ${nomes.length} local(is) só com o nome (o endereço pode ser completado depois)?\n\n${nomes.slice(0, 15).join('\n')}${nomes.length > 15 ? '\n…' : ''}`)) return;
+      e.currentTarget.disabled = true;
+      let ok = 0;
+      for (const nome of nomes) {
+        const r = await api('api/receb-locais', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nome }) }).catch(() => null);
+        if (r && (r.ok || r.status === 409)) ok++;
+      }
+      alert(`${ok} local(is) cadastrado(s).`); renderLocais();
+    });
+  }
+  const ligarUsados = raizEl => {
+  raizEl.querySelectorAll('[data-cad]').forEach(b => b.addEventListener('click', () => { CAD.novoNome = b.dataset.cad; location.hash = 'receb/locais~novo'; }));
+  raizEl.querySelectorAll('[data-corr]').forEach(b => b.addEventListener('click', async () => {
     const de = b.dataset.corr;
     const para = await pedirValor({ titulo: 'Corrigir local', rotulo: 'Trocar por', texto: `Troca “${esc(de)}” em todas as entregas.`, sugestoes: nomesSug.filter(v => nrm(v) !== nrm(de)) });
     if (para === null || nrm(para) === nrm(de) && para === de) return;
     const r = await corrigirLote('local', de, para);
     if (r) { alert(`${r.linhas} entrega(s) corrigida(s) em ${r.folhas} folha(s).`); renderLocais(); }
   }));
-  el.querySelectorAll('[data-apagar]').forEach(b => b.addEventListener('click', async () => {
+  raizEl.querySelectorAll('[data-apagar]').forEach(b => b.addEventListener('click', async () => {
     const de = b.dataset.apagar;
     if (!confirm(`Apagar o local “${de}” de todas as entregas? O campo fica vazio e a linha volta para conferência.`)) return;
     const r = await corrigirLote('local', de, '');
     if (r) { alert(`Local apagado de ${r.linhas} entrega(s).`); renderLocais(); }
   }));
+  };
   if (editando) ligarFormLocal(editando);
   desenharCad();
+  desenharUsados();
   atualizarSel();
 }
+
+// filtros "Mostrar" da aba Locais: [valor, rótulo, teste]
+const FILTROS_USADOS = [
+  ['', 'todos', () => true],
+  ['semcad', 'sem cadastro', u => !localCadastrado(u.nome)],
+  ['cad', 'cadastrados', u => !!localCadastrado(u.nome)],
+  ['semcat', 'sem categoria', u => !categoriaDoLocal(u.nome)],
+  ['semend', 'sem endereço', u => { const L = localCadastrado(u.nome), P = principalDoLocal(u.nome); return !(L && enderecoTxt(L)) && !(P && enderecoTxt(P)); }],
+  ['sala', 'salas (sublocais)', u => !!principalDoLocal(u.nome)],
+  ['naosala', 'não são salas', u => !principalDoLocal(u.nome)],
+];
+const FILTROS_CAD = [
+  ['', 'todos'], ['semend', 'sem endereço'], ['semcat', 'sem categoria'], ['comsalas', 'com salas'], ['sala', 'salas (sublocais)'],
+  ['sement', 'sem entregas'], ['vinc', 'com SELB vinculado'], ['semvinc', 'sem SELB vinculado'],
+];
 
 // janela "Unificar": escolhe qual dos marcados é o principal (ou outro nome); os demais viram salas dele
 function escolherPrincipal(nomes, sugestoes) {
