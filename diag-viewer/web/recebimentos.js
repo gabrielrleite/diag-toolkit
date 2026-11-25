@@ -73,6 +73,7 @@ async function renderReceb(arg) {
   if (arg === 'importar') return renderImportar();
   if (arg && arg.split('~')[0] === 'selbs') return renderSelbs(arg.split('~').slice(1).join('~'));
   if (arg === 'treino') return renderTreino();
+  if (arg === 'textos') return renderTextosReceb();
   if (arg === 'suprimentos') return renderSuprimentosResumo();
   if (arg && arg.split('~')[0] === 'impressoras') return renderImpressoras(arg.split('~').slice(1).join('~'));
   if (arg && arg.split('~')[0] === 'locais') return renderLocais(arg.split('~')[1] || '');
@@ -86,7 +87,7 @@ async function renderReceb(arg) {
   const pend = regs.filter(l => !l.revisado).length;
   el.innerHTML = abasReceb('entregas') + `
     <div class="panel">
-      <div class="head-row"><h2>Folhas de recebimento</h2><a class="btn" href="#receb/importar">Importar folhas (OCR)</a></div>
+      <div class="head-row"><h2>${TX('entregas.folhas')}</h2><a class="btn" href="#receb/importar">${TX('entregas.importar')}</a></div>
       <div class="stats">
         ${statHtml(RB.folhas.length, 'folhas', 'arquivo', '')}
         ${statHtml(regs.length, 'recebimentos registrados', 'lista', 'violeta')}
@@ -103,10 +104,11 @@ async function renderReceb(arg) {
       </tbody></table></div>`}
     </div>
     ${regs.length ? `<div class="panel">
-      <div class="head-row"><h2>Recebimentos</h2><button class="btn ghost small" id="rbCsv">Exportar CSV</button></div>
+      <div class="head-row"><h2>${TX('entregas.lista')}</h2><button class="btn ghost small" id="rbCsv">Exportar CSV</button></div>
       <div class="filters">
         <label>SELB <input type="search" id="rbFSelb" value="${esc(RB.fSelb)}" list="rbDlFSelb" placeholder="todos" style="width:130px" autocomplete="off"></label>
         <label>Local <input type="search" id="rbFLocal" value="${esc(RB.fLocal)}" list="rbDlFLocal" placeholder="todos" style="min-width:220px" autocomplete="off"></label>
+        ${CAD.categorias.length ? `<label>Categoria ${selectCategoria('rbFCat', RB.fCat || '')}</label>` : ''}
         <label>Buscar <input type="search" id="rbQ" value="${esc(RB.q)}" placeholder="data, folha..." style="min-width:180px"></label>
         <label class="chk"><input type="checkbox" id="rbPend"> só não conferidos</label>
         <button class="btn ghost small" id="rbLimpar">Limpar filtros</button><span class="muted" id="rbN"></span></div>
@@ -123,7 +125,7 @@ async function renderReceb(arg) {
   regs.sort((a, b) => String(b.dataIso || b.folha.criadoEm).localeCompare(String(a.dataIso || a.folha.criadoEm)) || a.n - b.n);
   const draw = () => {
     const q = N(RB.q), fs = chave(RB.fSelb), fl = N(RB.fLocal), so = $('#rbPend').checked;
-    filtrados = regs.filter(l => (!so || !l.revisado) && (!fs || selbsDe(l.selb).some(x => chave(x).includes(fs))) && (!fl || l._local.includes(fl)) && (!q || l._busca.includes(q)));
+    filtrados = regs.filter(l => (!so || !l.revisado) && (!fs || selbsDe(l.selb).some(x => chave(x).includes(fs))) && (!fl || l._local.includes(fl)) && casaCategoria(l.local, RB.fCat) && (!q || l._busca.includes(q)));
     $('#rbN').textContent = `${filtrados.length} de ${regs.length}`;
     // resumo do filtro: por SELB mostra os locais por onde passou; por local, quantos SELB diferentes
     let resumo = '';
@@ -153,7 +155,8 @@ async function renderReceb(arg) {
   $('#rbQ').addEventListener('input', e => { RB.q = e.target.value; draw(); });
   $('#rbFSelb').addEventListener('input', e => { RB.fSelb = e.target.value; draw(); });
   $('#rbFLocal').addEventListener('input', e => { RB.fLocal = e.target.value; draw(); });
-  $('#rbLimpar').addEventListener('click', () => { RB.q = RB.fSelb = RB.fLocal = ''; $('#rbQ').value = $('#rbFSelb').value = $('#rbFLocal').value = ''; $('#rbPend').checked = false; draw(); });
+  if ($('#rbFCat')) $('#rbFCat').addEventListener('change', e => { RB.fCat = e.target.value; draw(); });
+  $('#rbLimpar').addEventListener('click', () => { RB.q = RB.fSelb = RB.fLocal = RB.fCat = ''; if ($('#rbFCat')) $('#rbFCat').value = ''; $('#rbQ').value = $('#rbFSelb').value = $('#rbFLocal').value = ''; $('#rbPend').checked = false; draw(); });
   $('#rbPend').addEventListener('change', draw);
   $('#rbCsv').addEventListener('click', () => {
     const cel = v => /[";\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
@@ -216,6 +219,9 @@ const chaveSelb = v => RecebOCR.normalizar(v).replace(/ /g, '');
 function historicoSelb(selb, F, linhaAtual) {
   const meus = selbsDe(selb);
   if (!meus.length) return null;
+  // local vinculado no cadastro do SELB (um SELB só na linha): vale mais que o histórico
+  const vinc = meus.length === 1 && (cadSelb(meus[0]) || {}).local;
+  if (vinc) return { local: vinc, quando: '', vezes: 0, cadastro: true };
   const casa = campo => meus.some(x => RecebOCR.temSelb(campo, x));
   const regs = [];
   for (const f of RB.folhas || []) {
@@ -241,9 +247,9 @@ function aplicarHistorico(l, F) {
   const duvidoso = !l.local || (d && (d.tipo === 'incerto' || d.tipo === 'lista')) || (conf != null && conf < 60);
   if (duvidoso) {
     const lido = d && d.tipo !== 'historico' && d.tipo !== 'histSug' ? d.texto : (d && d.tipo === 'historico' ? d.texto : l.local);
-    l.dica.local = { tipo: 'historico', selb: l.selb, quando: h.quando, vezes: h.vezes, texto: lido || '' };
+    l.dica.local = { tipo: 'historico', selb: l.selb, quando: h.quando, vezes: h.vezes, cadastro: !!h.cadastro, texto: lido || '' };
     l.local = h.local;
-  } else l.dica.local = { tipo: 'histSug', selb: l.selb, quando: h.quando, vezes: h.vezes, valor: h.local };
+  } else l.dica.local = { tipo: 'histSug', selb: l.selb, quando: h.quando, vezes: h.vezes, cadastro: !!h.cadastro, valor: h.local };
 }
 const dataCurta = iso => /^\d{4}-\d{2}-\d{2}$/.test(iso || '') ? iso.split('-').reverse().join('/') : '';
 
@@ -844,9 +850,9 @@ function renderFolhaEditor(F, imgs, opt = {}) {
           : dica.tipo === 'lista'
           ? `OCR leu “${esc(dica.texto)}” → corrigido pela lista <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar “${esc(dica.texto)}”</button>`
           : dica.tipo === 'historico'
-          ? `preenchido pelo histórico do SELB ${esc(dica.selb)} (${dica.vezes} entrega${dica.vezes > 1 ? 's' : ''}${quando}) — corrija se mudou${dica.texto ? ` <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar o lido “${esc(dica.texto)}”</button>` : ''}`
+          ? `${dica.cadastro ? `preenchido pelo local vinculado ao SELB ${esc(dica.selb)} (cadastro)` : `preenchido pelo histórico do SELB ${esc(dica.selb)} (${dica.vezes} entrega${dica.vezes > 1 ? 's' : ''}${quando})`} — corrija se mudou${dica.texto ? ` <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar o lido “${esc(dica.texto)}”</button>` : ''}`
           : dica.tipo === 'histSug'
-          ? `histórico do SELB ${esc(dica.selb)}: “${esc(dica.valor)}”${quando} <button type="button" class="linklike" data-hist="${i}">usar</button>`
+          ? `${dica.cadastro ? `local vinculado ao SELB ${esc(dica.selb)}: “${esc(dica.valor)}”` : `histórico do SELB ${esc(dica.selb)}: “${esc(dica.valor)}”${quando}`} <button type="button" class="linklike" data-hist="${i}">usar</button>`
           : `ilegível para o OCR${dica.texto ? ` (leu “${esc(dica.texto)}”)` : ''}: digite olhando a foto`;
         const nSel = c.k === 'selb' ? selbsDe(v).length : 0;
         return `<label class="rb-c rb-${c.k}">${esc(c.rotulo)}${nSel > 1 ? ` <span class="badge" data-nsel>${nSel} SELBs</span>` : ''}${conf != null ? ` <small title="confiança do OCR">${conf}%</small>` : ''}

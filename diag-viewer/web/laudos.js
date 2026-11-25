@@ -47,7 +47,7 @@ function showModule(mod) {
     coletas: ['Remoção de hardware', 'Coletas do diag-hardware: linha do tempo, saúde e relatório técnico', 'chip'],
     laudos: ['Laudos de manutenção', 'Laudos numerados, modelos personalizáveis e assinatura digital', 'doc'],
     equip: ['Equipamentos', 'Histórico de coletas e laudos por patrimônio', 'monitor'],
-    receb: ['Recebimentos', 'Folhas de entrega assinadas, lidas por OCR, com locais e SELBs', 'caixa'],
+    receb: [Tp('modulo.titulo'), Tp('modulo.sub'), 'caixa'],
   }[mod];
   $('#pgTitulo').textContent = titulo; $('#pgSub').textContent = sub; $('#pgIcone').innerHTML = IC(ic);
   document.title = titulo + ' · Central diag';
@@ -72,7 +72,7 @@ async function route() {
     return renderLaudoList();
   }
   if (mod === 'equip') { showModule('equip'); return renderEquip(arg || ''); }
-  if (mod === 'receb') { showModule('receb'); return renderReceb(arg || ''); }
+  if (mod === 'receb') { await carregarTextosReceb(); showModule('receb'); return renderReceb(arg || ''); }
   showModule('coletas');
 }
 window.addEventListener('hashchange', route);
