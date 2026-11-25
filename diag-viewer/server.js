@@ -672,6 +672,22 @@ async function textosRoute(req, res, url) {
   return json(res, 200, out);
 }
 
+// garante cadastro para os nomes de local informados (ex.: local vinculado no cadastro do SELB); devolve os criados
+async function garantirLocais(nomes) {
+  nomes = [...new Set(nomes.map(n => String(n || '').trim()).filter(Boolean))];
+  if (!nomes.length) return [];
+  return withLock('receb-locais', async () => {
+    const db = await lerLocais(), agora = new Date().toISOString(), criados = [];
+    for (const nome of nomes) {
+      if (db.locais.some(l => normRec(l.nome) === normRec(nome))) continue;
+      const n = { id: crypto.randomBytes(5).toString('hex'), ...sanitizeLocal({ nome }), criadoEm: agora, atualizadoEm: agora };
+      db.locais.push(n); criados.push(n.nome);
+    }
+    if (criados.length) await writeJsonAtomic(LOCAIS_FILE, db);
+    return criados;
+  });
+}
+
 // unificar: os locais escolhidos viram sublocais (salas, blocos...) de um local principal.
 // Nomes sem cadastro são cadastrados; as entregas não mudam (continuam com o nome da sala).
 async function unificarLocais(req, res, ip) {
@@ -816,8 +832,17 @@ async function selbsRoute(req, res, url, chave) {
     return { code: 405, erro: 'Método não permitido.' };
   });
   if (out.audit) await audit({ ...out.audit, ip });
+  // local vinculado sem cadastro: cadastra na aba Locais
+  if (req.method === 'PUT' && out.code === 200 && out.obj.local) {
+    const criados = await garantirLocais([out.obj.local]);
+    if (criados.length) await audit({ acao: 'local_cadastrado_pelo_selb', selb: out.obj.selb, nome: criados[0], ip });
+  }
   return json(res, out.code, out.erro ? { erro: out.erro } : out.obj);
 }
+// na subida: locais vinculados a SELBs antes desta versão também ganham cadastro
+setTimeout(async () => {
+  try { const c = await garantirLocais((await lerSelbsCad()).selbs.map(x => x.local)); if (c.length) console.log('locais cadastrados pelos SELBs:', c.join(', ')); } catch (e) { console.error('locais dos SELBs:', e.message); }
+}, 1000);
 
 // ------------------------------------------------------------------ monitoramento das impressoras (ping)
 // A cada MONITOR_MIN minutos: 1 ping com o MENOR pacote possível (0 bytes de dados = pacote IP de 28 bytes:

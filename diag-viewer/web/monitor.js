@@ -355,7 +355,7 @@ async function renderImpressoras(arg = '') {
         <td class="acoes">${i.pausada ? `<button class="btn ghost small" data-retomar="${esc(i.selb)}">Retomar</button>` : menuPausa(i.selb)}</td></tr>`).join('')}
       </tbody></table></div>`}
     </div>
-    <div class="panel">
+    <div class="panel" data-recolher="imp-alertas">
       <div class="head-row"><h2>${TX('impressoras.alertas')}</h2><div class="filters" style="margin:0">
         ${AL.webhook ? '<span class="badge ok">envio por webhook ativo</span>' : '<span class="badge" title="Defina ALERTA_WEBHOOK na stack para receber os alertas no Teams, Google Chat, Discord ou ntfy">sem envio externo</span>'}
         ${AL.webhook ? `<button class="btn ghost small" id="impAlertaTeste">${IC('raio')}Enviar alerta de teste</button>` : ''}</div></div>
@@ -366,7 +366,7 @@ async function renderImpressoras(arg = '') {
         <td>${!AL.webhook && !a.enviado ? '<span class="muted">—</span>' : a.enviado ? '<span class="badge ok">sim</span>' : '<span class="badge bad">falhou</span>'}</td></tr>`).join('')}
       </tbody></table></div>`}
     </div>
-    <div class="panel">
+    <div class="panel" data-recolher="imp-quedas">
       <div class="head-row"><h2>${TX('impressoras.quedas')}</h2></div>
       ${!quedas.length ? vazioHtml('check', 'Nenhuma queda nos últimos 30 dias', '') : `
       <div class="tablewrap"><table class="clickable"><thead><tr><th class="nosort">Impressora</th><th class="nosort">Caiu em</th><th class="nosort">Voltou em</th><th class="nosort">Tempo fora</th></tr></thead><tbody>
@@ -389,6 +389,7 @@ async function renderImpressoras(arg = '') {
     b.disabled = false;
   });
   ligarPausa(el, () => renderImpressoras());
+  ligarRecolhiveis(el);
 }
 
 // ---------------------------------------------------------------- detalhe de uma impressora
