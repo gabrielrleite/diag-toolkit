@@ -140,7 +140,7 @@ async function renderLocais(editarId) {
   const el = $('#mod-receb');
   el.innerHTML = abasReceb('locais') + '<div class="panel">Carregando...</div>';
   if (!(await needServer(el))) return;
-  const [regs] = await Promise.all([carregarEntregas(), carregarLocais()]);
+  const [regs] = await Promise.all([carregarEntregas(), carregarLocais(), carregarSelbsCad()]);
   // locais usados nas entregas, agrupados sem diferenciar acento/maiúscula
   const usados = new Map();
   for (const l of regs) {
@@ -184,6 +184,7 @@ async function renderLocais(editarId) {
       }).join('')}</tbody></table></div>`}
     </div>`;
   const contaNome = nome => [...usados.values()].filter(u => nrm(u.nome) === nrm(nome)).reduce((a, u) => a + u.n, 0);
+  const vincDe = L => [...RB.selbsCad.values()].filter(c => c.local && nrm(c.local) === nrm(L.nome)).map(c => c.selb);
   const subsDe = L => CAD.locais.filter(x => x.pai === L.id).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { numeric: true }));
   const raiz = L => !L.pai || !CAD.locais.some(x => x.id === L.pai);
   const linhaLocal = (L, P) => {
@@ -192,7 +193,7 @@ async function renderLocais(editarId) {
     return `<tr class="${P ? 'lc-sub' : subs.length ? 'lc-pai' : ''}"><td>${cb(L.nome)}</td>
       <td>${P ? '<span class="lc-ramo">└</span>' : ''}<b>${esc(L.nome)}</b> ${catBadge(categoriaDoLocal(L.nome), !catPorId(L.categoria))}${subs.length ? ` <span class="badge">${subs.length} ${subs.length === 1 ? 'sala' : 'salas'}</span>` : ''}${L.referencia ? `<br><small>${esc(L.referencia)}</small>` : ''}</td>
       <td>${end ? esc(end) : P && enderecoTxt(P) ? `<span class="muted">${esc(enderecoTxt(P))} (do principal)</span>` : '<span class="muted">sem endereço</span>'}${L.obs ? `<br><small>${esc(L.obs)}</small>` : ''}</td>
-      <td>${n ? `<button class="linklike" data-ver="${esc(L.nome)}">${n}</button>` : '0'}${nSubs ? ` <small class="muted" title="entregas nas salas/sublocais">+${nSubs} nas salas</small>` : ''}</td>
+      <td>${n ? `<button class="linklike" data-ver="${esc(L.nome)}">${n}</button>` : '0'}${vincDe(L).length ? ` <small class="muted" title="SELBs vinculados: ${esc(vincDe(L).join(', '))}">· ${vincDe(L).length} SELB${vincDe(L).length > 1 ? 's' : ''} vinculado${vincDe(L).length > 1 ? 's' : ''}</small>` : ''}${nSubs ? ` <small class="muted" title="entregas nas salas/sublocais">+${nSubs} nas salas</small>` : ''}</td>
       <td class="acoes">${P ? `<button class="btn ghost small" data-solta="${esc(L.id)}" title="Deixa de ser sala de ${esc(P.nome)}">Desvincular</button>` : ''}
         <a class="btn ghost small" href="#receb/locais~${esc(L.id)}">Editar</a>
         <button class="btn ghost small perigo" data-excluir="${esc(L.id)}">Excluir</button></td></tr>`;
@@ -395,7 +396,7 @@ async function renderSelbs(editar = '') {
       const c = cadSelb(s.selb);
       if (CAD.soMulti && s.locais.size <= 1) return false;
       if (CAD.soSemCad && c) return false;
-      return !q || kSelb(s.selb).includes(qk) || [...s.locais.values()].some(o => nrm(o.nome).includes(q)) || (c && nrm([c.marca, c.modelo, c.serie, c.ip, c.obs].join(' ')).includes(q));
+      return !q || kSelb(s.selb).includes(qk) || [...s.locais.values()].some(o => nrm(o.nome).includes(q)) || (c && nrm([c.marca, c.modelo, c.serie, c.ip, c.obs, c.local].join(' ')).includes(q));
     });
     $('#sbN').textContent = `${lista.length} de ${selbs.length}`;
     $('#sbLista').innerHTML = !lista.length ? vazioHtml('tag', 'Nenhum SELB', 'Os SELBs aparecem aqui conforme as folhas são importadas, ou cadastre um em "Cadastrar SELB".') : `<div class="tablewrap"><table><thead><tr><th class="nosort">SELB / equipamento</th><th class="nosort">Entregas</th><th class="nosort">Itens entregues</th><th class="nosort">Locais</th><th class="nosort">Última entrega</th><th class="nosort"></th></tr></thead><tbody>
@@ -408,14 +409,16 @@ async function renderSelbs(editar = '') {
             <br>${c ? `<small>${esc(resumoEquip(c, false))}</small>${c.ip ? ` <a class="ip-link" href="http://${esc(c.ip)}" target="_blank" rel="noopener" title="Abrir o painel da impressora">${situacaoHtml(c.ip)}${esc(c.ip)}</a>` : ''}${c.obs ? `<br><small class="it-obs" title="${esc(c.obs)}">${IC('tag')} ${esc(c.obs.slice(0, 70))}${c.obs.length > 70 ? '…' : ''}</small>` : ''}` : '<span class="badge">sem cadastro</span>'}</td>
           <td>${s.n ? `<button class="linklike" data-ver="${esc(s.selb)}">${s.n}</button>` : '0'}</td>
           <td>${itens.length ? itensHtml(itens, false) : '<span class="muted">—</span>'}</td>
-          <td>${locs.map(o => `<div class="rb-loc">${esc(o.nome)} <small>(${o.n})</small>${localCadastrado(o.nome) ? '' : ' <span class="badge warn" title="Local sem cadastro">?</span>'}
-            ${s.locais.size > 1 ? `<button class="linklike" data-todas="${esc(s.selb)}" data-loc="${esc(o.nome)}">usar em todas</button>` : ''}</div>`).join('') || '—'}</td>
+          <td>${c && c.local ? `<div class="rb-loc rb-vinc" title="Local vinculado no cadastro do SELB (vale mesmo sem entrega)">${IC('local')}<b>${esc(localComPrincipal(c.local))}</b> <span class="badge ok">vinculado</span>${localCadastrado(c.local) ? '' : ' <span class="badge warn" title="Local sem cadastro">?</span>'}</div>` : ''}
+            ${locs.map(o => `<div class="rb-loc">${esc(o.nome)} <small>(${o.n})</small>${localCadastrado(o.nome) ? '' : ' <span class="badge warn" title="Local sem cadastro">?</span>'}
+            ${s.locais.size > 1 ? `<button class="linklike" data-todas="${esc(s.selb)}" data-loc="${esc(o.nome)}">usar em todas</button>` : ''}</div>`).join('') || (c && c.local ? '' : '—')}</td>
           <td class="t">${s.ult ? `${esc(s.ult.data || '—')}<br><small>${esc(s.ult.local || '')}</small>` : '—'}</td>
           <td class="acoes"><a class="btn small" href="#receb/selbs~${encodeURIComponent(s.selb)}">${c ? 'Cadastro' : 'Cadastrar'}</a>
-            ${s.n ? `<details class="menu-acoes"><summary class="btn ghost small" title="Mais ações">⋯</summary><div>
-              <button class="btn ghost small" data-corrsel="${esc(s.selb)}">Corrigir SELB…</button>
-              <button class="btn ghost small" data-corrloc="${esc(s.selb)}">Trocar local…</button>
-              <button class="btn ghost small perigo" data-apagasel="${esc(s.selb)}">Apagar das entregas</button></div></details>` : ''}</td></tr>`;
+            <details class="menu-acoes"><summary class="btn ghost small" title="Mais ações">⋯</summary><div>
+              <button class="btn ghost small" data-vinc="${esc(s.selb)}">${c && c.local ? 'Trocar local vinculado…' : 'Vincular local…'}</button>
+              ${s.n ? `<button class="btn ghost small" data-corrsel="${esc(s.selb)}">Corrigir SELB…</button>
+              <button class="btn ghost small" data-corrloc="${esc(s.selb)}">Trocar local das entregas…</button>
+              <button class="btn ghost small perigo" data-apagasel="${esc(s.selb)}">Apagar das entregas</button>` : ''}</div></details></td></tr>`;
       }).join('')}</tbody></table></div>`;
     const box = $('#sbLista');
     box.querySelectorAll('[data-ver]').forEach(b => b.addEventListener('click', () => { RB.fSelb = b.dataset.ver; RB.fLocal = ''; RB.q = ''; location.hash = 'receb'; }));
@@ -426,6 +429,18 @@ async function renderSelbs(editar = '') {
       let n = 0;
       for (const o of outros) { const r = await corrigirLote('local', o.nome, certo, s.selb); if (!r) return; n += r.linhas; }
       alert(`${n} entrega(s) do SELB ${s.selb} atualizada(s).`); renderSelbs();
+    }));
+    // vincula um local ao SELB pelo cadastro (cria o cadastro se ainda não existir); vazio = desvincula
+    box.querySelectorAll('[data-vinc]').forEach(b => b.addEventListener('click', async () => {
+      const s = mapa.get(kSelb(b.dataset.vinc)), c = cadSelb(s.selb);
+      const para = await pedirValor({ titulo: `Local do SELB ${s.selb}`, rotulo: 'Local vinculado', permitirVazio: true,
+        texto: 'Fica no cadastro do SELB e vale mesmo sem entrega: aparece nas impressoras, suprimentos e alertas e preenche o local na conferência das folhas. As entregas já registradas não mudam. Vazio = desvincular.',
+        valor: c && c.local || (s.ult ? s.ult.local || '' : ''), sugestoes: nomesSug });
+      if (para === null) return;
+      const novo = { ...(c || { selb: s.selb, tipo: 'impressora', cor: 'colorida', suprimento: 'tinta', cores: ['preto', 'azul', 'magenta', 'amarelo'] }), local: para };
+      const r = await api('api/receb-selbs/' + encodeURIComponent(s.selb), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(novo) }).catch(() => null);
+      if (!r || !r.ok) return alert('Não foi possível vincular.');
+      renderSelbs();
     }));
     box.querySelectorAll('[data-corrloc]').forEach(b => b.addEventListener('click', async () => {
       const s = mapa.get(kSelb(b.dataset.corrloc));
@@ -534,6 +549,8 @@ function formSelb(c, uso) {
       <label>Marca <input id="sfMarca" value="${esc(c.marca || '')}" maxlength="80" placeholder="ex.: Epson"></label>
       <label>Modelo <input id="sfModelo" value="${esc(c.modelo || '')}" maxlength="120" placeholder="ex.: L6270"></label>
       <label>Nº de série <input id="sfSerie" value="${esc(c.serie || '')}" maxlength="80"></label>
+      <label class="sf-local">Local vinculado <input id="sfLocal" value="${esc(c.local || '')}" maxlength="160" list="sfDlLocal" placeholder="${uso && uso.ult && uso.ult.local ? 'pelas entregas: ' + esc(uso.ult.local) : 'ex.: Escola X › Sala 3'}" autocomplete="off"></label>
+      <datalist id="sfDlLocal">${[...new Set([...CAD.locais.map(L => L.nome), ...(uso ? [...uso.locais.values()].map(o => o.nome) : [])])].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
       <label>IP da impressora <input id="sfIp" value="${esc(c.ip || '')}" maxlength="15" inputmode="decimal" placeholder="ex.: 192.168.0.50" autocomplete="off"></label>
       <label>Comunidade SNMP <input id="sfCom" value="${esc(c.comunidade || '')}" maxlength="64" placeholder="public" autocomplete="off"></label>
       <div class="sf-testar"><span class="lbl">Níveis e dados da impressora</span><button type="button" class="btn ghost" id="sfTestar">${IC('raio')}Testar leitura</button></div>
@@ -611,7 +628,7 @@ function ligarFormSelb(c) {
     const corpo = {
       tipo: $('#sfTipo').value, marca: $('#sfMarca').value, modelo: $('#sfModelo').value, serie: $('#sfSerie').value,
       cor: f.querySelector('input[name="sfCor"]:checked').value, suprimento: f.querySelector('input[name="sfSup"]:checked').value,
-      cores: [...f.querySelectorAll('#sfCores input:checked')].map(cb => cb.value), ip: $('#sfIp').value.trim(), comunidade: $('#sfCom').value.trim(), obs: $('#sfObs').value,
+      cores: [...f.querySelectorAll('#sfCores input:checked')].map(cb => cb.value), ip: $('#sfIp').value.trim(), comunidade: $('#sfCom').value.trim(), obs: $('#sfObs').value, local: $('#sfLocal').value.trim(),
     };
     e.target.disabled = true;
     const r = await api('api/receb-selbs/' + encodeURIComponent(selb), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }).catch(() => null);

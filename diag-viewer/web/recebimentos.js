@@ -219,6 +219,9 @@ const chaveSelb = v => RecebOCR.normalizar(v).replace(/ /g, '');
 function historicoSelb(selb, F, linhaAtual) {
   const meus = selbsDe(selb);
   if (!meus.length) return null;
+  // local vinculado no cadastro do SELB (um SELB só na linha): vale mais que o histórico
+  const vinc = meus.length === 1 && (cadSelb(meus[0]) || {}).local;
+  if (vinc) return { local: vinc, quando: '', vezes: 0, cadastro: true };
   const casa = campo => meus.some(x => RecebOCR.temSelb(campo, x));
   const regs = [];
   for (const f of RB.folhas || []) {
@@ -244,9 +247,9 @@ function aplicarHistorico(l, F) {
   const duvidoso = !l.local || (d && (d.tipo === 'incerto' || d.tipo === 'lista')) || (conf != null && conf < 60);
   if (duvidoso) {
     const lido = d && d.tipo !== 'historico' && d.tipo !== 'histSug' ? d.texto : (d && d.tipo === 'historico' ? d.texto : l.local);
-    l.dica.local = { tipo: 'historico', selb: l.selb, quando: h.quando, vezes: h.vezes, texto: lido || '' };
+    l.dica.local = { tipo: 'historico', selb: l.selb, quando: h.quando, vezes: h.vezes, cadastro: !!h.cadastro, texto: lido || '' };
     l.local = h.local;
-  } else l.dica.local = { tipo: 'histSug', selb: l.selb, quando: h.quando, vezes: h.vezes, valor: h.local };
+  } else l.dica.local = { tipo: 'histSug', selb: l.selb, quando: h.quando, vezes: h.vezes, cadastro: !!h.cadastro, valor: h.local };
 }
 const dataCurta = iso => /^\d{4}-\d{2}-\d{2}$/.test(iso || '') ? iso.split('-').reverse().join('/') : '';
 
@@ -847,9 +850,9 @@ function renderFolhaEditor(F, imgs, opt = {}) {
           : dica.tipo === 'lista'
           ? `OCR leu “${esc(dica.texto)}” → corrigido pela lista <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar “${esc(dica.texto)}”</button>`
           : dica.tipo === 'historico'
-          ? `preenchido pelo histórico do SELB ${esc(dica.selb)} (${dica.vezes} entrega${dica.vezes > 1 ? 's' : ''}${quando}) — corrija se mudou${dica.texto ? ` <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar o lido “${esc(dica.texto)}”</button>` : ''}`
+          ? `${dica.cadastro ? `preenchido pelo local vinculado ao SELB ${esc(dica.selb)} (cadastro)` : `preenchido pelo histórico do SELB ${esc(dica.selb)} (${dica.vezes} entrega${dica.vezes > 1 ? 's' : ''}${quando})`} — corrija se mudou${dica.texto ? ` <button type="button" class="linklike" data-usar="${i}" data-k="${c.k}">usar o lido “${esc(dica.texto)}”</button>` : ''}`
           : dica.tipo === 'histSug'
-          ? `histórico do SELB ${esc(dica.selb)}: “${esc(dica.valor)}”${quando} <button type="button" class="linklike" data-hist="${i}">usar</button>`
+          ? `${dica.cadastro ? `local vinculado ao SELB ${esc(dica.selb)}: “${esc(dica.valor)}”` : `histórico do SELB ${esc(dica.selb)}: “${esc(dica.valor)}”${quando}`} <button type="button" class="linklike" data-hist="${i}">usar</button>`
           : `ilegível para o OCR${dica.texto ? ` (leu “${esc(dica.texto)}”)` : ''}: digite olhando a foto`;
         const nSel = c.k === 'selb' ? selbsDe(v).length : 0;
         return `<label class="rb-c rb-${c.k}">${esc(c.rotulo)}${nSel > 1 ? ` <span class="badge" data-nsel>${nSel} SELBs</span>` : ''}${conf != null ? ` <small title="confiança do OCR">${conf}%</small>` : ''}

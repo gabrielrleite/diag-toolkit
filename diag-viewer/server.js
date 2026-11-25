@@ -778,6 +778,7 @@ function sanitizeSelbCad(b) {
     // toda impressora usa caixa de manutenção; scanner (sem suprimento) não
     caixa: !(b && b.tipo === 'scanner') && suprimento !== 'nenhum',
     comunidade: t('comunidade', 64), // comunidade SNMP de leitura (vazio = "public")
+    local: t('local', 160), // local vinculado no cadastro (vale mesmo sem entrega e prevalece sobre o das folhas)
     ip: /^(\d{1,3}\.){3}\d{1,3}$/.test(t('ip', 15)) && t('ip', 15).split('.').every(n => +n <= 255) ? t('ip', 15) : '',
     obs: txt(b && b.obs, 2000),
   };
@@ -943,6 +944,8 @@ async function ultimosLocais() {
       if (!u || q >= u.q) m.set(k, { local: l.local, q });
     }
   }
+  // local vinculado no cadastro do SELB prevalece (e vale para SELB sem entrega)
+  for (const c of (await lerSelbsCad()).selbs) if (c.local) m.set(chaveSelbRec(c.selb), { local: c.local, q: '9999', vinculado: true });
   return m;
 }
 const descImp = (c, local) => [c.selb, [c.marca, c.modelo].filter(Boolean).join(' '), local].filter(Boolean).join(' · ');
