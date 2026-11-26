@@ -817,6 +817,11 @@ async function selbsRoute(req, res, url, chave) {
     const agora = new Date().toISOString();
     if (req.method === 'PUT') {
       const novo = { selb, ...sanitizeSelbCad(body), criadoEm: i >= 0 ? db.selbs[i].criadoEm : agora, atualizadoEm: agora };
+      // cadastro novo ("Cadastrar SELB") não sobrescreve um SELB que já existe
+      if (body.novo && i >= 0) return { code: 409, erro: `O SELB ${db.selbs[i].selb} já tem cadastro. Abra o cadastro dele para alterar.` };
+      // IP repetido: bloqueia IP novo/alterado que já é de outro SELB (repetições antigas não travam outras edições)
+      const outro = novo.ip && db.selbs.find((x, k) => k !== i && x.ip === novo.ip);
+      if (outro && (i < 0 || db.selbs[i].ip !== novo.ip)) return { code: 409, erro: `O IP ${novo.ip} já é do SELB ${outro.selb}.` };
       if (i >= 0) db.selbs[i] = novo; else db.selbs.push(novo);
       await writeJsonAtomic(SELBS_FILE, db);
       setTimeout(() => rodadaMonitor().catch(() => {}), 500); // IP novo/alterado: verifica logo

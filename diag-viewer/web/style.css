@@ -875,3 +875,9 @@ tr.lc-sub td:nth-child(2) { padding-left: 26px; }
 .tx-grupo.recolhido { padding-bottom: 4px; }
 .lc-tog { margin-left: -4px; }
 .lc-arvore { display: inline-flex; gap: 6px; }
+
+/* avisos no cadastro do SELB (SELB já cadastrado, IP repetido) */
+.sf-aviso { display: flex; align-items: center; gap: 5px; margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--bad); }
+.sf-aviso .ic { width: 13px; height: 13px; flex: none; }
+.sf-aviso a { color: inherit; }
+label:has(> .sf-aviso:not([hidden])) > input { border-color: var(--bad); }
