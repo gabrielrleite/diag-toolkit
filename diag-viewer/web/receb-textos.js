@@ -39,7 +39,7 @@ const TEXTOS_RECEB = [
   ['Suprimentos', [
     ['suprimentos.titulo', 'Título', 'Tinta, toner e caixa de manutenção'],
     ['suprimentos.compras', 'Título: lista de compras', 'Para comprar / separar'],
-    ['suprimentos.rodape', 'Nota de rodapé', 'Caixa de manutenção em % de vida útil (100% = nova). n/i = a impressora não informa. * código anotado na observação do SELB.'],
+    ['suprimentos.rodape', 'Nota de rodapé', 'Caixa de manutenção em % de vida útil (100% = nova). n/i = a impressora não informa. * código que a impressora não informa: da observação do SELB ou da tabela de códigos do modelo.'],
   ]],
   ['Treinamento', [
     ['treino.titulo', 'Título', 'Modo treinamento'],

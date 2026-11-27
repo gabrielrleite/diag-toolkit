@@ -875,3 +875,16 @@ tr.lc-sub td:nth-child(2) { padding-left: 26px; }
 .tx-grupo.recolhido { padding-bottom: 4px; }
 .lc-tog { margin-left: -4px; }
 .lc-arvore { display: inline-flex; gap: 6px; }
+
+/* avisos no cadastro do SELB (SELB já cadastrado, IP repetido) */
+.sf-aviso { display: flex; align-items: center; gap: 5px; margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--bad); }
+.sf-aviso .ic { width: 13px; height: 13px; flex: none; }
+.sf-aviso a { color: inherit; }
+label:has(> .sf-aviso:not([hidden])) > input { border-color: var(--bad); }
+
+/* códigos por modelo */
+.cod-tab td { vertical-align: top; }
+.cod-tab .cod-in { width: 100%; min-width: 92px; font-size: 12.5px; padding: 5px 7px; }
+.cod-tab .cod-in::placeholder { color: var(--muted); opacity: .85; }
+.cod-orig { display: block; font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+.cod-tab th .it-bola { width: 10px; height: 10px; vertical-align: middle; }

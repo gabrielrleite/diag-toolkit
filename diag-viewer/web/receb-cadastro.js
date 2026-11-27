@@ -365,6 +365,11 @@ function ligarRecolhiveis(raiz) {
   });
 }
 
+// IP: o campo já vem com o começo da rede; repetidos são bloqueados
+const IP_PREFIXO = '192.168.';
+const donoDoIp = (ip, exceto = '') => ip ? [...RB.selbsCad.values()].find(x => x.ip === ip && kSelb(x.selb) !== kSelb(exceto || '')) || null : null;
+const ipsRepetidos = () => { const n = new Map(); for (const x of RB.selbsCad.values()) if (x.ip) n.set(x.ip, (n.get(x.ip) || 0) + 1); return new Set([...n].filter(([, q]) => q > 1).map(([ip]) => ip)); };
+
 // filtros "Mostrar" da aba Locais: [valor, rótulo, teste]
 const FILTROS_USADOS = [
   ['', 'todos', () => true],
@@ -487,15 +492,18 @@ async function renderSelbs(editar = '') {
       <div class="filters"><label>Buscar <input type="search" id="sbQ" value="${esc(CAD.qSelb)}" placeholder="SELB, local, marca, modelo, IP, código" style="min-width:260px"></label>
         <label class="chk"><input type="checkbox" id="sbMulti" ${CAD.soMulti ? 'checked' : ''}> só com mais de um local</label>
         <label class="chk"><input type="checkbox" id="sbSemCad" ${CAD.soSemCad ? 'checked' : ''}> só sem cadastro</label>
+        <label class="chk" title="Dois ou mais SELBs com o mesmo IP"><input type="checkbox" id="sbIpRep" ${CAD.soIpRep ? 'checked' : ''}> só IP repetido <small class="muted">(${[...RB.selbsCad.values()].filter(x => x.ip && ipsRepetidos().has(x.ip)).length})</small></label>
         <label class="chk" title="Sem local vinculado no cadastro e sem local nas entregas"><input type="checkbox" id="sbSemLocal" ${CAD.soSemLocal ? 'checked' : ''}> só sem local <small class="muted">(${selbs.filter(x => !x.locais.size && !(cadSelb(x.selb) || {}).local).length})</small></label><span class="muted" id="sbN"></span></div>
       <div id="sbLista"></div>
     </div>`;
   const desenhar = () => {
     const q = nrm(CAD.qSelb), qk = kSelb(CAD.qSelb);
+    const repetidos = ipsRepetidos();
     const lista = selbs.filter(s => {
       const c = cadSelb(s.selb);
       if (CAD.soMulti && s.locais.size <= 1) return false;
       if (CAD.soSemCad && c) return false;
+      if (CAD.soIpRep && !(c && c.ip && repetidos.has(c.ip))) return false;
       if (CAD.soSemLocal && (s.locais.size || (c && c.local))) return false;
       return !q || kSelb(s.selb).includes(qk) || [...s.locais.values()].some(o => nrm(o.nome).includes(q)) || (c && nrm([c.marca, c.modelo, c.serie, c.ip, c.obs, c.local].join(' ')).includes(q));
     });
@@ -507,7 +515,7 @@ async function renderSelbs(editar = '') {
           .sort((a, b) => Object.keys(ITENS).indexOf(a.item) - Object.keys(ITENS).indexOf(b.item));
         return `<tr class="${s.locais.size > 1 ? 'rb-multi' : ''}">
           <td><b>${esc(s.selb)}</b>${s.locais.size > 1 ? ' <span class="badge warn">mais de um local</span>' : ''}
-            <br>${c ? `<small>${esc(resumoEquip(c, false))}</small>${c.ip ? ` <a class="ip-link" href="http://${esc(c.ip)}" target="_blank" rel="noopener" title="Abrir o painel da impressora">${situacaoHtml(c.ip)}${esc(c.ip)}</a>` : ''}${c.obs ? `<br><small class="it-obs" title="${esc(c.obs)}">${IC('tag')} ${esc(c.obs.slice(0, 70))}${c.obs.length > 70 ? '…' : ''}</small>` : ''}` : '<span class="badge">sem cadastro</span>'}</td>
+            <br>${c ? `<small>${esc(resumoEquip(c, false))}</small>${c.ip ? ` <a class="ip-link" href="http://${esc(c.ip)}" target="_blank" rel="noopener" title="Abrir o painel da impressora">${situacaoHtml(c.ip)}${esc(c.ip)}</a>${repetidos.has(c.ip) ? ` <span class="badge bad" title="Mesmo IP em: ${esc([...RB.selbsCad.values()].filter(x => x.ip === c.ip).map(x => x.selb).join(', '))}">IP repetido</span>` : ''}` : ''}${c.obs ? `<br><small class="it-obs" title="${esc(c.obs)}">${IC('tag')} ${esc(c.obs.slice(0, 70))}${c.obs.length > 70 ? '…' : ''}</small>` : ''}` : '<span class="badge">sem cadastro</span>'}</td>
           <td>${s.n ? `<button class="linklike" data-ver="${esc(s.selb)}">${s.n}</button>` : '0'}</td>
           <td>${itens.length ? itensHtml(itens, false) : '<span class="muted">—</span>'}</td>
           <td>${c && c.local ? `<div class="rb-loc rb-vinc" title="Local vinculado no cadastro do SELB (vale mesmo sem entrega)">${IC('local')}<b>${esc(localComPrincipal(c.local))}</b> <span class="badge ok">vinculado</span>${localCadastrado(c.local) ? '' : ' <span class="badge warn" title="Local sem cadastro">?</span>'}</div>` : ''}
@@ -574,6 +582,7 @@ async function renderSelbs(editar = '') {
   $('#sbMulti').addEventListener('change', e => { CAD.soMulti = e.target.checked; desenhar(); });
   $('#sbSemCad').addEventListener('change', e => { CAD.soSemCad = e.target.checked; desenhar(); });
   $('#sbSemLocal').addEventListener('change', e => { CAD.soSemLocal = e.target.checked; desenhar(); });
+  $('#sbIpRep').addEventListener('change', e => { CAD.soIpRep = e.target.checked; desenhar(); });
   if (editando) ligarFormSelb(editando);
   desenhar();
 }
@@ -646,14 +655,14 @@ function formSelb(c, uso) {
     <div class="head-row"><h2>${c.novo ? 'Cadastrar SELB' : 'Cadastro do SELB ' + esc(c.selb)}</h2>
       ${uso && uso.n ? `<span class="muted">${uso.n} entrega(s) registrada(s)</span>` : ''}</div>
     <div class="rep-grid">
-      <label>SELB <input id="sfSelb" value="${esc(c.selb)}" maxlength="40" ${c.novo ? '' : 'readonly'} placeholder="ex.: A1234"></label>
+      <label>SELB <input id="sfSelb" value="${esc(c.selb)}" maxlength="40" ${c.novo ? '' : 'readonly'} placeholder="ex.: A1234"><small class="sf-aviso" id="sfSelbAviso" hidden></small></label>
       <label>Tipo <select id="sfTipo">${Object.entries(TIPO_EQUIP_TXT).map(([k, t]) => `<option value="${k}" ${c.tipo === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
       <label>Marca <input id="sfMarca" value="${esc(c.marca || '')}" maxlength="80" placeholder="ex.: Epson"></label>
       <label>Modelo <input id="sfModelo" value="${esc(c.modelo || '')}" maxlength="120" placeholder="ex.: L6270"></label>
       <label>Nº de série <input id="sfSerie" value="${esc(c.serie || '')}" maxlength="80"></label>
       <label class="sf-local">Local vinculado <input id="sfLocal" value="${esc(c.local || '')}" maxlength="160" list="sfDlLocal" placeholder="${uso && uso.ult && uso.ult.local ? 'pelas entregas: ' + esc(uso.ult.local) : 'ex.: Escola X › Sala 3'}" autocomplete="off"></label>
       <datalist id="sfDlLocal">${[...new Set([...CAD.locais.map(L => L.nome), ...(uso ? [...uso.locais.values()].map(o => o.nome) : [])])].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
-      <label>IP da impressora <input id="sfIp" value="${esc(c.ip || '')}" maxlength="15" inputmode="decimal" placeholder="ex.: 192.168.0.50" autocomplete="off"></label>
+      <label>IP da impressora <input id="sfIp" value="${esc(c.ip || IP_PREFIXO)}" maxlength="15" inputmode="decimal" placeholder="ex.: 192.168.0.50" autocomplete="off"><small class="sf-aviso" id="sfIpAviso" hidden></small></label>
       <label>Comunidade SNMP <input id="sfCom" value="${esc(c.comunidade || '')}" maxlength="64" placeholder="public" autocomplete="off"></label>
       <div class="sf-testar"><span class="lbl">Níveis e dados da impressora</span><button type="button" class="btn ghost" id="sfTestar">${IC('raio')}Testar leitura</button></div>
     </div>
@@ -692,14 +701,14 @@ function ligarFormSelb(c) {
   atualizar();
   // lê agora, pela rede, os níveis da impressora (SNMP) sem gravar nada
   $('#sfTestar').addEventListener('click', async e => {
-    const ip = $('#sfIp').value.trim(), box = $('#sfSnmp');
+    const ip = ipDoForm(), box = $('#sfSnmp');
     if (!ipValido(ip)) { alert('Informe um IP válido para testar.'); return $('#sfIp').focus(); }
     e.currentTarget.disabled = true; box.hidden = false; box.innerHTML = `<p class="muted">${IC('relogio')} Lendo ${esc(ip)} por SNMP…</p>`;
-    const r = await api('api/suprimentos/testar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip, comunidade: $('#sfCom').value.trim() }) })
+    const r = await api('api/suprimentos/testar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip, comunidade: $('#sfCom').value.trim(), marca: $('#sfMarca').value.trim(), modelo: $('#sfModelo').value.trim() }) })
       .then(x => x.json()).catch(() => ({ ok: false, erro: 'servidor indisponível' }));
     $('#sfTestar').disabled = false;
     box.innerHTML = r.ok
-      ? `<div class="sf-snmp-cab"><span class="badge ok">leitura ok</span> <b>${esc(r.modelo || 'modelo não informado')}</b>${r.serie ? ` <small class="mono">série ${esc(r.serie)}</small>` : ''} <small class="muted">SNMP ${esc(r.versao)} · ${r.ms} ms</small></div>${suprimentosHtml(r.itens, { tipo: $('#sfTipo').value, obs: $('#sfObs').value, cor: (f.querySelector('input[name="sfCor"]:checked') || {}).value, suprimento: (f.querySelector('input[name="sfSup"]:checked') || {}).value })}`
+      ? `<div class="sf-snmp-cab"><span class="badge ok">leitura ok</span> <b>${esc(r.modelo || 'modelo não informado')}</b>${r.serie ? ` <small class="mono">série ${esc(r.serie)}</small>` : ''} <small class="muted">SNMP ${esc(r.versao)} · ${r.ms} ms</small></div>${suprimentosHtml(r.itens, { modeloCod: r.modeloCod, tipo: $('#sfTipo').value, obs: $('#sfObs').value, cor: (f.querySelector('input[name="sfCor"]:checked') || {}).value, suprimento: (f.querySelector('input[name="sfSup"]:checked') || {}).value })}`
       : `<p class="err">${IC('alerta')} Não foi possível ler: ${esc(r.erro || 'erro')}</p>${r.sysDescr ? `<p class="muted">O equipamento respondeu: ${esc(r.sysDescr)}</p>` : ''}`;
     // dados do equipamento lidos: oferece preencher o cadastro
     if (r.ok && r.equipamento) {
@@ -722,15 +731,36 @@ function ligarFormSelb(c) {
       });
     }
   });
+  // avisos ao digitar: SELB já cadastrado (cadastro novo) e IP de outro SELB
+  const ipDoForm = () => { const v = $('#sfIp').value.trim(); return v === IP_PREFIXO || v === IP_PREFIXO.slice(0, -1) ? '' : v; };
+  const checarSelb = () => {
+    const v = $('#sfSelb').value.trim(), ja = c.novo && v && cadSelb(v), av = $('#sfSelbAviso');
+    av.hidden = !ja;
+    if (ja) av.innerHTML = `${IC('alerta')} já cadastrado — <a href="#receb/selbs~${encodeURIComponent(ja.selb)}">abrir o cadastro de ${esc(ja.selb)}</a>`;
+    return !ja;
+  };
+  const checarIp = () => {
+    const ip = ipDoForm(), dono = ip && ipValido(ip) && donoDoIp(ip, c.novo ? '' : c.selb), av = $('#sfIpAviso');
+    av.hidden = !dono;
+    if (dono) av.innerHTML = `${IC('alerta')} IP já usado pelo SELB <a href="#receb/selbs~${encodeURIComponent(dono.selb)}">${esc(dono.selb)}</a>`;
+    return !dono || dono.ip === c.ip; // repetição antiga (já salva assim) não trava a edição
+  };
+  $('#sfSelb').addEventListener('input', checarSelb);
+  $('#sfIp').addEventListener('input', checarIp);
+  // começa com "192.168.": o cursor vai para o fim
+  $('#sfIp').addEventListener('focus', e => { const t = e.target; if (t.value === IP_PREFIXO) setTimeout(() => t.setSelectionRange(t.value.length, t.value.length)); });
+  checarIp();
   $('#sfSalvar').addEventListener('click', async e => {
     const selb = $('#sfSelb').value.trim().toUpperCase();
     if (!selb || RecebOCR.separarSelbs(selb).length !== 1) { alert('Informe um SELB (um só).'); return $('#sfSelb').focus(); }
-    const ip = $('#sfIp').value.trim();
+    if (!checarSelb()) { alert(`O SELB ${selb} já tem cadastro. Abra o cadastro dele para alterar.`); return $('#sfSelb').focus(); }
+    const ip = ipDoForm();
     if (ip && !ipValido(ip)) { alert('IP inválido. Use o formato 192.168.0.50.'); return $('#sfIp').focus(); }
+    if (!checarIp()) { alert(`O IP ${ip} já é do SELB ${donoDoIp(ip, c.selb).selb}. Cada impressora precisa de um IP próprio.`); return $('#sfIp').focus(); }
     const corpo = {
       tipo: $('#sfTipo').value, marca: $('#sfMarca').value, modelo: $('#sfModelo').value, serie: $('#sfSerie').value,
       cor: f.querySelector('input[name="sfCor"]:checked').value, suprimento: f.querySelector('input[name="sfSup"]:checked').value,
-      cores: [...f.querySelectorAll('#sfCores input:checked')].map(cb => cb.value), ip: $('#sfIp').value.trim(), comunidade: $('#sfCom').value.trim(), obs: $('#sfObs').value, local: $('#sfLocal').value.trim(),
+      cores: [...f.querySelectorAll('#sfCores input:checked')].map(cb => cb.value), ip, novo: !!c.novo, comunidade: $('#sfCom').value.trim(), obs: $('#sfObs').value, local: $('#sfLocal').value.trim(),
     };
     e.target.disabled = true;
     const r = await api('api/receb-selbs/' + encodeURIComponent(selb), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }).catch(() => null);
