@@ -704,11 +704,11 @@ function ligarFormSelb(c) {
     const ip = ipDoForm(), box = $('#sfSnmp');
     if (!ipValido(ip)) { alert('Informe um IP válido para testar.'); return $('#sfIp').focus(); }
     e.currentTarget.disabled = true; box.hidden = false; box.innerHTML = `<p class="muted">${IC('relogio')} Lendo ${esc(ip)} por SNMP…</p>`;
-    const r = await api('api/suprimentos/testar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip, comunidade: $('#sfCom').value.trim() }) })
+    const r = await api('api/suprimentos/testar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip, comunidade: $('#sfCom').value.trim(), marca: $('#sfMarca').value.trim(), modelo: $('#sfModelo').value.trim() }) })
       .then(x => x.json()).catch(() => ({ ok: false, erro: 'servidor indisponível' }));
     $('#sfTestar').disabled = false;
     box.innerHTML = r.ok
-      ? `<div class="sf-snmp-cab"><span class="badge ok">leitura ok</span> <b>${esc(r.modelo || 'modelo não informado')}</b>${r.serie ? ` <small class="mono">série ${esc(r.serie)}</small>` : ''} <small class="muted">SNMP ${esc(r.versao)} · ${r.ms} ms</small></div>${suprimentosHtml(r.itens, { tipo: $('#sfTipo').value, obs: $('#sfObs').value, cor: (f.querySelector('input[name="sfCor"]:checked') || {}).value, suprimento: (f.querySelector('input[name="sfSup"]:checked') || {}).value })}`
+      ? `<div class="sf-snmp-cab"><span class="badge ok">leitura ok</span> <b>${esc(r.modelo || 'modelo não informado')}</b>${r.serie ? ` <small class="mono">série ${esc(r.serie)}</small>` : ''} <small class="muted">SNMP ${esc(r.versao)} · ${r.ms} ms</small></div>${suprimentosHtml(r.itens, { modeloCod: r.modeloCod, tipo: $('#sfTipo').value, obs: $('#sfObs').value, cor: (f.querySelector('input[name="sfCor"]:checked') || {}).value, suprimento: (f.querySelector('input[name="sfSup"]:checked') || {}).value })}`
       : `<p class="err">${IC('alerta')} Não foi possível ler: ${esc(r.erro || 'erro')}</p>${r.sysDescr ? `<p class="muted">O equipamento respondeu: ${esc(r.sysDescr)}</p>` : ''}`;
     // dados do equipamento lidos: oferece preencher o cadastro
     if (r.ok && r.equipamento) {

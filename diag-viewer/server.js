@@ -1200,7 +1200,9 @@ const NOME_ITEM = { preto: 'preto', azul: 'azul', magenta: 'magenta', amarelo: '
 async function alertasSuprimento(c, ant, r) {
   const grav = { ok: 0, baixo: 1, vazio: 2 };
   const antes = new Map(((ant && ant.ok && ant.itens) || []).map(i => [i.item + '|' + i.idx, i]));
-  const cods = RecebOCR.codigosObs(c.obs, c.cor === 'pb');
+  // códigos: o anotado no SELB vale mais que o da tabela do modelo (calculado só se houver alerta)
+  let cods = null;
+  const codsDe = async () => cods || (cods = { ...codsDoModelo(await catalogoCodigos(), modeloDoSelb(c, r)), ...RecebOCR.codigosObs(c.obs, c.cor === 'pb') });
   let local = null;
   for (const i of r.itens) {
     if (i.item === 'outro' || !['baixo', 'vazio'].includes(i.estado)) continue;
@@ -1209,7 +1211,7 @@ async function alertasSuprimento(c, ant, r) {
     if (local === null) local = await localCompleto(((await ultimosLocais()).get(chaveSelbRec(c.selb)) || {}).local);
     const toner = c.suprimento === 'toner' || /toner/i.test(i.desc + i.tipoTxt);
     const nome = i.item === 'caixa' ? 'Caixa de manutenção' : `${toner ? 'Toner' : 'Tinta'} ${NOME_ITEM[i.item]}`;
-    const codigo = i.codigo || cods[i.item] || '';
+    const codigo = i.codigo || (await codsDe())[i.item] || '';
     const quanto = i.item === 'caixa' ? `${i.pct}% de vida útil` : `${i.pct}%`;
     await registrarAlerta({ tipo: 'suprimento', selb: c.selb, ip: c.ip, item: i.item, pct: i.pct, estado: i.estado, codigo,
       texto: `${i.estado === 'vazio' ? '🔴' : '🟡'} ${nome} ${i.estado === 'vazio' ? (i.item === 'caixa' ? 'precisa ser trocada' : 'acabando') : (i.item === 'caixa' ? 'perto do fim' : toner ? 'baixo' : 'baixa')}: ${quanto} — ${descImp(c, local)}${codigo ? ` · código ${codigo}` : ''}` });
@@ -1222,6 +1224,47 @@ async function limparHistoricoSuprimentos() {
     if (m && m[1] < limite) await fsp.rm(path.join(MON_DIR, n), { force: true });
   }
 }
+// ---- códigos de tinta/toner/caixa por modelo: a maioria das impressoras não informa o código por SNMP.
+// A tabela junta o que qualquer impressora do mesmo modelo informa, os códigos anotados na observação dos
+// SELBs desse modelo e o que foi digitado na tabela (manual, prevalece). Vale para todas as do modelo.
+const CODIGOS_FILE = path.join(RDIR, 'codigos.json');
+const ITENS_COD = ['preto', 'azul', 'magenta', 'amarelo', 'caixa'];
+async function lerCodigosManuais() { try { return JSON.parse(await fsp.readFile(CODIGOS_FILE, 'utf8')); } catch { return {}; } }
+function modeloDoSelb(c, r) {
+  const eq = r && r.ok ? (r.equipamento || snmp.equipamentoDe(r)) : null;
+  const marca = (c && c.marca) || (eq && eq.marca) || '', modelo = (c && c.modelo) || (eq && eq.modelo) || '';
+  return modelo ? { chave: normRec(`${marca} ${modelo}`), nome: [marca, modelo].filter(Boolean).join(' ') } : null;
+}
+async function catalogoCodigos() {
+  const manual = await lerCodigosManuais(), mod = new Map();
+  for (const c of (await lerSelbsCad()).selbs) {
+    const r = supr.selbs[chaveSelbRec(c.selb)], m = modeloDoSelb(c, r);
+    if (!m) continue;
+    const e = mod.get(m.chave) || { chave: m.chave, nome: m.nome, selbs: [], votos: {} };
+    e.selbs.push(c.selb);
+    const votar = (item, cod, origem) => { if (!cod) return; const v = e.votos[item] = e.votos[item] || {}; v[cod + '|' + origem] = (v[cod + '|' + origem] || 0) + 1; };
+    if (r && r.ok) for (const i of r.itens) if (ITENS_COD.includes(i.item)) votar(i.item, i.codigo, 'impressora');
+    for (const [item, cod] of Object.entries(RecebOCR.codigosObs(c.obs, c.cor === 'pb'))) if (ITENS_COD.includes(item)) votar(item, cod, 'cadastro');
+    mod.set(m.chave, e);
+  }
+  for (const [chave, v] of Object.entries(manual)) if (!mod.has(chave)) mod.set(chave, { chave, nome: v.nome || chave, selbs: [], votos: {} });
+  for (const e of mod.values()) {
+    e.codigos = {}; e.manual = {};
+    for (const item of ITENS_COD) {
+      const man = (manual[e.chave] || {})[item];
+      if (man) e.manual[item] = man;
+      // o que a impressora informa vale mais que o anotado; entre iguais, o mais comum
+      const votos = Object.entries(e.votos[item] || {}).map(([k, n]) => { const [cod, origem] = k.split('|'); return { cod, origem, n: n + (origem === 'impressora' ? 1000 : 0) }; }).sort((a, b) => b.n - a.n);
+      if (votos[0]) e.aprendido = { ...(e.aprendido || {}), [item]: { cod: votos[0].cod, origem: votos[0].origem } };
+      e.codigos[item] = man ? { cod: man, origem: 'manual' } : votos[0] ? { cod: votos[0].cod, origem: votos[0].origem } : null;
+      if (!e.codigos[item]) delete e.codigos[item];
+    }
+    delete e.votos;
+  }
+  return mod;
+}
+const codsDoModelo = (cat, m) => m && cat.get(m.chave) ? Object.fromEntries(Object.entries(cat.get(m.chave).codigos).map(([k, v]) => [k, v.cod])) : {};
+
 async function suprimentosRoute(req, res, url, acao) {
   if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
   if (acao === 'testar') {
@@ -1232,6 +1275,8 @@ async function suprimentosRoute(req, res, url, acao) {
     if (!ipOk(ip)) return json(res, 400, { erro: 'IP inválido.' });
     const r = await lerUma({ ip, comunidade: txt(b.comunidade, 64).trim() });
     await audit({ acao: 'suprimentos_teste', ip, ok: r.ok, ipCliente: ipOf(req) });
+    // códigos do modelo (pelo que está no formulário ou pelo que a impressora informou)
+    if (r.ok) r.modeloCod = codsDoModelo(await catalogoCodigos(), modeloDoSelb({ marca: txt(b.marca, 80).trim(), modelo: txt(b.modelo, 120).trim() }, r));
     return json(res, 200, r);
   }
   if (acao === 'ler') {
@@ -1256,6 +1301,23 @@ async function suprimentosRoute(req, res, url, acao) {
       if (Object.keys(dif).length) sugestoes.push({ selb: c.selb, lidoEm: r.lidoEm, modeloLido: r.modelo, dif });
     }
     return json(res, 200, { sugestoes });
+  } else if (acao === 'codigos') {
+    if (req.method === 'PUT') {
+      // grava os códigos digitados de um modelo ({chave, nome, codigos: {item: código}}); vazio = volta ao aprendido
+      let b; try { b = await readJsonBody(req, 20000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+      const chave = normRec(txt(b.chave, 200));
+      if (!chave) return json(res, 400, { erro: 'Modelo inválido.' });
+      const limpo = v => txt(v, 30).toUpperCase().replace(/[^A-Z0-9 .\-\/]/g, '').trim();
+      await withLock('codigos', async () => {
+        const db = await lerCodigosManuais(), e = { nome: txt(b.nome, 200).trim() || chave };
+        for (const item of ITENS_COD) { const v = limpo(b.codigos && b.codigos[item]); if (v) e[item] = v; }
+        if (ITENS_COD.some(k => e[k])) db[chave] = e; else delete db[chave];
+        await writeJsonAtomic(CODIGOS_FILE, db);
+      });
+      await audit({ acao: 'codigos_modelo', modelo: chave, ip: ipOf(req) });
+    } else if (req.method !== 'GET') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+    const cat = await catalogoCodigos();
+    return json(res, 200, { modelos: [...cat.values()].sort((a, b) => b.selbs.length - a.selbs.length || a.nome.localeCompare(b.nome)) });
   } else if (acao === 'historico') {
     const selb = txt(url.searchParams.get('selb'), 40).trim(), dias = Math.max(1, Math.min(SUPR_DIAS, +url.searchParams.get('dias') || 90));
     if (!selb) return json(res, 400, { erro: 'Informe o SELB.' });
@@ -1269,7 +1331,10 @@ async function suprimentosRoute(req, res, url, acao) {
     }
     return json(res, 200, { selb, dias, pontos });
   } else if (req.method !== 'GET') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
-  json(res, 200, { horas: SUPR_HORAS, rodada: supr.rodada, lendo: !!suprRodando, selbs: supr.selbs });
+  // cada leitura leva os códigos do modelo (para quando a impressora não informa)
+  const cat = await catalogoCodigos(), cads = new Map((await lerSelbsCad()).selbs.map(c => [chaveSelbRec(c.selb), c]));
+  const selbs = Object.fromEntries(Object.entries(supr.selbs).map(([k, r]) => [k, { ...r, modeloCod: codsDoModelo(cat, modeloDoSelb(cads.get(k), r)) }]));
+  json(res, 200, { horas: SUPR_HORAS, rodada: supr.rodada, lendo: !!suprRodando, selbs });
 }
 setTimeout(() => rodadaSuprimentos().catch(e => console.error('suprimentos:', e.message)), 120000).unref(); // 2 min após subir
 setInterval(() => rodadaSuprimentos().catch(e => console.error('suprimentos:', e.message)), SUPR_HORAS * 3600000).unref();
@@ -1955,7 +2020,7 @@ const server = http.createServer(async (req, res) => {
     if (oc) return await ocrRoute(req, res, url, oc[1]);
     const tr = p.match(/^\/api\/treino(?:\/(config|exemplos|esquecer|exportar\.zip))?$/);
     if (tr) return await treinoRoute(req, res, url, tr[1]);
-    const su = p.match(/^\/api\/suprimentos(?:\/(ler|testar|historico|cadastro))?$/);
+    const su = p.match(/^\/api\/suprimentos(?:\/(ler|testar|historico|cadastro|codigos))?$/);
     if (su) return await suprimentosRoute(req, res, url, su[1]);
     const mo = p.match(/^\/api\/monitor(?:\/(verificar|pausa|historico|quedas|alertas|alerta-teste))?$/);
     if (mo) return await monitorRoute(req, res, url, mo[1]);

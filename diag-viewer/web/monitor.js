@@ -31,12 +31,17 @@ function cadDe(ref) {
   if (ref && typeof ref === 'object') return ref;
   try { return ref && typeof cadSelb === 'function' ? cadSelb(ref) : null; } catch { return null; }
 }
+// ordem: o que a impressora informa > anotado na observação do SELB > tabela de códigos do modelo
 function codigoSup(i, ref) {
-  if (i.codigo) return { cod: i.codigo, cad: false };
+  if (i.codigo) return { cod: i.codigo, cad: false, origem: 'impressora' };
+  if (i.item === 'outro') return null;
   const c = cadDe(ref);
-  const cod = c && c.obs && i.item !== 'outro' ? RecebOCR.codigosObs(c.obs, c.cor === 'pb')[i.item] : '';
-  return cod ? { cod, cad: true } : null;
+  const cod = c && c.obs ? RecebOCR.codigosObs(c.obs, c.cor === 'pb')[i.item] : '';
+  if (cod) return { cod, cad: true, origem: 'cadastro' };
+  const mc = (ref && typeof ref === 'object' ? ref.modeloCod : (supDe(ref) || {}).modeloCod) || {};
+  return mc[i.item] ? { cod: mc[i.item], cad: true, origem: 'modelo' } : null;
 }
+const ORIGEM_COD = { impressora: 'código informado pela impressora', cadastro: 'código anotado na observação do SELB', modelo: 'código da tabela do modelo (aba Suprimentos)' };
 const semCaixa = (itens, ref) => !itens.some(i => i.item === 'caixa') && (typeof usaCaixa !== 'function' || usaCaixa(cadDe(ref)));
 // lista completa (cadastro, detalhe): uma barra por suprimento
 function suprimentosHtml(itens, selb = '') {
@@ -46,7 +51,7 @@ function suprimentosHtml(itens, selb = '') {
     const cd = codigoSup(i, selb);
     return `
     <div class="sup-linha est-${esc(i.estado.replace(' ', '-'))}" title="${esc(i.desc)}${i.tipoTxt ? ' · ' + esc(i.tipoTxt) : ''}">
-      <span class="sup-nome"><span class="it-bola it-${i.item === 'outro' ? 'nd' : i.item}">${i.item === 'caixa' ? IC('caixa') : ''}</span>${esc(nomeSup(i))}${cd ? ` <small class="mono sup-cod" title="${cd.cad ? 'código anotado no cadastro do SELB' : 'código informado pela impressora'}">${esc(cd.cod)}${cd.cad ? ' *' : ''}</small>` : ''}</span>
+      <span class="sup-nome"><span class="it-bola it-${i.item === 'outro' ? 'nd' : i.item}">${i.item === 'caixa' ? IC('caixa') : ''}</span>${esc(nomeSup(i))}${cd ? ` <small class="mono sup-cod" title="${ORIGEM_COD[cd.origem]}">${esc(cd.cod)}${cd.cad ? ' *' : ''}</small>` : ''}</span>
       <span class="sup-trilho"><span class="sup-fill it-${i.item}" style="width:${i.pct ?? (i.estado === 'tem' ? 100 : 0)}%"></span></span>
       <span class="sup-val">${esc(valorSup(i))}${SUP_ALERTA.includes(i.estado) ? ` <span class="badge ${i.estado === 'vazio' ? 'bad' : 'warn'}">${esc(rotuloEstado(i))}</span>` : ''}</span>
     </div>`;
@@ -54,7 +59,7 @@ function suprimentosHtml(itens, selb = '') {
     <div class="sup-linha est-desconhecido" title="A impressora não lista a caixa de manutenção entre os suprimentos (SNMP). Alguns modelos só mostram na própria tela ou na interface web.">
       <span class="sup-nome"><span class="it-bola it-caixa">${IC('caixa')}</span>Caixa</span>
       <span class="sup-trilho"></span><span class="sup-val muted">não informada pela impressora</span></div>` : ''}</div>
-    ${itens.some(i => codigoSup(i, selb)?.cad) ? '<p class="muted"><small>* código anotado na observação do SELB (a impressora não informou).</small></p>' : ''}`;
+    ${itens.some(i => codigoSup(i, selb)?.cad) ? '<p class="muted"><small>* a impressora não informou o código: veio da observação do SELB ou da tabela de códigos do modelo.</small></p>' : ''}`;
 }
 // versão compacta (tabela de impressoras): só tintas/toners e caixa
 function suprimentosMini(s, selb = '') {
@@ -253,7 +258,7 @@ async function renderSuprimentosResumo() {
       </div>
       ${compras.length ? `<h3 class="sr-h3">${TX('suprimentos.compras')}</h3>
       <div class="tablewrap"><table><thead><tr><th class="nosort">Código</th><th class="nosort">Item</th><th class="nosort">Impressoras</th><th class="nosort t">Qtd.</th></tr></thead><tbody>
-      ${compras.map(g => `<tr><td class="mono"><b>${esc(g.cod || '—')}</b>${g.cod ? '' : ` <small class="muted">sem código no cadastro</small>`}</td>
+      ${compras.map(g => `<tr><td class="mono"><b>${esc(g.cod || '—')}</b>${g.cod ? '' : ` <small class="muted">sem código — preencha em <a href="#srCodigos">Códigos por modelo</a></small>`}</td>
         <td><span class="sr-item"><span class="it-bola it-${g.item}">${g.item === 'caixa' ? IC('caixa') : ''}</span><span>${esc(SUP_NOME[g.item])}<br><small class="muted">${esc(g.modelo)}</small></span></span></td>
         <td>${g.selbs.map(x => `<a href="#receb/impressoras~${encodeURIComponent(x)}">${esc(x)}</a>`).join(', ')}</td>
         <td class="t"><b>${g.selbs.length}</b>${g.trocar ? ` <span class="badge bad" title="com 5% ou menos">${g.trocar} trocar</span>` : ''}</td></tr>`).join('')}
@@ -268,6 +273,11 @@ async function renderSuprimentosResumo() {
         <span class="muted" id="srN"></span></div>
       <div id="srGrade"></div>
       <p class="muted"><small>${TX('suprimentos.rodape')}</small></p>
+    </div>
+    <div class="panel" data-recolher="sup-codigos" id="srCodigos">
+      <div class="head-row"><h2>Códigos por modelo</h2></div>
+      <p class="muted">A maioria das impressoras não informa o código do cartucho pela rede. Aqui fica um código por modelo e cor, que vale para <b>todas</b> as impressoras desse modelo: ele é aprendido do que alguma impressora informa ou do que foi anotado na observação de um SELB, e pode ser digitado ou corrigido. Campo vazio = usa o aprendido.</p>
+      <div id="srCodTab"><p class="muted">Carregando…</p></div>
     </div>`;
   const desenhar = () => {
     const q = nrm(SR.q);
@@ -295,7 +305,40 @@ async function renderSuprimentosResumo() {
   el.querySelectorAll('input[name="srF"]').forEach(r => r.addEventListener('change', () => { SR.filtro = r.value; desenhar(); }));
   $('#srOrdem').addEventListener('change', e => { SR.ordem = e.target.value; desenhar(); });
   if ($('#srCat')) $('#srCat').addEventListener('change', e => { SR.cat = e.target.value; desenhar(); });
+  desenharCodigos();
+  ligarRecolhiveis(el);
   $('#srLer').addEventListener('click', async e => { const b = e.currentTarget; b.disabled = true; b.textContent = 'Lendo…'; await lerSuprimentosAgora(); renderSuprimentosResumo(); });
+}
+
+// tabela de códigos por modelo (GET/PUT api/suprimentos/codigos)
+const ORIGEM_TXT = { impressora: 'informado pela impressora', cadastro: 'anotado em um SELB', manual: 'digitado' };
+async function desenharCodigos() {
+  const box = $('#srCodTab'); if (!box) return;
+  const r = await api('api/suprimentos/codigos').catch(() => null);
+  const modelos = r && r.ok ? (await r.json()).modelos : null;
+  if (!modelos) { box.innerHTML = '<p class="err">Não foi possível carregar os códigos.</p>'; return; }
+  if (!modelos.length) { box.innerHTML = vazioHtml('tag', 'Nenhum modelo ainda', 'Os modelos aparecem conforme os SELBs têm marca/modelo no cadastro ou são lidos pela rede.'); return; }
+  const itens = ['preto', 'azul', 'magenta', 'amarelo', 'caixa'];
+  const faltam = m => itens.filter(k => !m.codigos[k]).length;
+  box.innerHTML = `<div class="tablewrap"><table class="cod-tab"><thead><tr><th class="nosort">Modelo</th>${itens.map(k => `<th class="nosort"><span class="it-bola it-${k}">${k === 'caixa' ? IC('caixa') : ''}</span> ${SUP_NOME[k]}</th>`).join('')}<th class="nosort"></th></tr></thead><tbody>
+    ${modelos.map((m, x) => `<tr data-x="${x}"><td><b>${esc(m.nome)}</b><br><small class="muted" title="${esc(m.selbs.join(', '))}">${m.selbs.length} impressora${m.selbs.length === 1 ? '' : 's'}</small></td>
+      ${itens.map(k => { const ap = (m.aprendido || {})[k]; return `<td><input class="mono cod-in" data-k="${k}" value="${esc(m.manual[k] || '')}" maxlength="30" placeholder="${esc(ap ? ap.cod : '—')}" aria-label="${esc(m.nome)}: ${SUP_NOME[k]}" title="${ap ? 'Aprendido: ' + esc(ap.cod) + ' (' + ORIGEM_TXT[ap.origem] + ')' : 'Nenhum código aprendido ainda'}">
+        <small class="cod-orig">${m.manual[k] ? 'digitado' : ap ? esc(ORIGEM_TXT[ap.origem]) : ''}</small></td>`; }).join('')}
+      <td class="acoes"><button class="btn ghost small" data-salvar="${x}" disabled>Salvar</button></td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="muted"><small>${modelos.filter(faltam).length ? `${modelos.filter(faltam).length} modelo(s) com cor sem código.` : 'Todos os modelos têm código.'} O cinza dentro do campo é o código aprendido; digite para trocar.</small></p>`;
+  box.querySelectorAll('tr[data-x]').forEach(tr => {
+    const m = modelos[+tr.dataset.x], b = tr.querySelector('[data-salvar]');
+    tr.querySelectorAll('.cod-in').forEach(inp => inp.addEventListener('input', () => { inp.value = inp.value.toUpperCase(); b.disabled = false; b.classList.remove('ghost'); }));
+    b.addEventListener('click', async () => {
+      b.disabled = true; b.textContent = 'Salvando…';
+      const codigos = Object.fromEntries([...tr.querySelectorAll('.cod-in')].map(i => [i.dataset.k, i.value.trim()]));
+      const rr = await api('api/suprimentos/codigos', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chave: m.chave, nome: m.nome, codigos }) }).catch(() => null);
+      if (!rr || !rr.ok) { b.disabled = false; b.textContent = 'Salvar'; return alert('Não foi possível salvar os códigos.'); }
+      // recarrega leituras (os cartões e a lista de compras passam a usar o código novo)
+      await atualizarMonitor(); renderSuprimentosResumo();
+    });
+  });
 }
 
 // ================================================================== Recebimentos › Impressoras
