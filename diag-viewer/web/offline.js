@@ -8,11 +8,11 @@ const OFF = { online: true, desde: null, fila: [], mem: new Map(), dbp: null, si
 
 // leituras guardadas para uso offline (caminho sem a barra inicial)
 const OFF_GET = [/^api\/monitor(\?|$)/, /^api\/monitor\/(quedas|alertas|historico)(\?|$)/, /^api\/suprimentos(\?|$)/,
-  /^api\/suprimentos\/(codigos|historico|cadastro)(\?|$)/, /^api\/receb-selbs$/, /^api\/receb-locais(\/categorias)?$/,
+  /^api\/suprimentos\/(codigos|historico|cadastro|trocas)(\?|$)/, /^api\/receb-selbs$/, /^api\/receb-locais(\/categorias)?$/,
   /^api\/receb-textos$/, /^api\/recebimentos\?linhas=1$/, /^api\/receb-entrega-campos$/, /^api\/recebimentos\/\d{8}-[0-9a-f]{6}(\/anexos)?$/];
 // o que é baixado sozinho (com conexão) para a cópia existir mesmo nas telas ainda não abertas
 const OFF_PRE = ['api/receb-selbs', 'api/receb-locais', 'api/receb-locais/categorias', 'api/recebimentos?linhas=1', 'api/monitor', 'api/suprimentos',
-  'api/suprimentos/codigos', 'api/receb-textos', 'api/receb-entrega-campos', 'api/monitor/quedas?dias=30', 'api/monitor/alertas?dias=30'];
+  'api/suprimentos/codigos', 'api/receb-textos', 'api/receb-entrega-campos', 'api/monitor/quedas?dias=30', 'api/monitor/alertas?dias=30', 'api/suprimentos/trocas?dias=90'];
 // alterações que podem esperar na fila
 const OFF_FILA = [[/^api\/recebimentos\/manual$/, ['POST']], [/^api\/receb-selbs\/[^/?]+$/, ['PUT', 'DELETE']], [/^api\/suprimentos\/codigos$/, ['PUT']], [/^api\/monitor\/pausa(\?|$)/, ['POST', 'DELETE']]];
 

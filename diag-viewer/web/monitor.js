@@ -10,7 +10,7 @@
   - aba SELBs: bolinha de situação ao lado do IP (situacaoHtml).
   A tela consulta o servidor a cada minuto. Depende de app.js (api, esc, IC) e de receb-cadastro.js (abasReceb).
 */
-const MON = { dados: null, porIp: new Map(), timer: null, diasDet: 7 };
+const MON = { dados: null, porIp: new Map(), timer: null, diasDet: 7, diasSup: 90 };
 // níveis de tinta/toner/caixa lidos por SNMP (GET /api/suprimentos)
 const SUP = { dados: null };
 
@@ -274,6 +274,11 @@ async function renderSuprimentosResumo() {
       <div id="srGrade"></div>
       <p class="muted"><small>${TX('suprimentos.rodape')}</small></p>
     </div>
+    <div class="panel" data-recolher="sup-trocas" id="srTrocasP">
+      <div class="head-row"><h2>Trocas de tinta, toner e caixa</h2><div class="filters" style="margin:0">
+        <label>Período <select id="srTrDias">${PERIODOS_SUP.map(([d, t]) => `<option value="${d}" ${d === (SR.diasTr || 90) ? 'selected' : ''}>${t}</option>`).join('')}</select></label></div></div>
+      <div id="srTrocas"><p class="muted">Carregando…</p></div>
+    </div>
     <div class="panel" data-recolher="sup-codigos" id="srCodigos">
       <div class="head-row"><h2>Códigos por modelo</h2></div>
       <p class="muted">A maioria das impressoras não informa o código do cartucho pela rede. Aqui fica um código por modelo e cor, que vale para <b>todas</b> as impressoras desse modelo: ele é aprendido do que alguma impressora informa ou do que foi anotado na observação de um SELB, e pode ser digitado ou corrigido. Campo vazio = usa o aprendido.</p>
@@ -306,8 +311,37 @@ async function renderSuprimentosResumo() {
   $('#srOrdem').addEventListener('change', e => { SR.ordem = e.target.value; desenhar(); });
   if ($('#srCat')) $('#srCat').addEventListener('change', e => { SR.cat = e.target.value; desenhar(); });
   desenharCodigos();
+  desenharTrocas();
+  $('#srTrDias').addEventListener('change', e => { SR.diasTr = +e.target.value; desenharTrocas(); });
+  if ($('#srCat')) $('#srCat').addEventListener('change', () => desenharTrocas());
   ligarRecolhiveis(el);
   $('#srLer').addEventListener('click', async e => { const b = e.currentTarget; b.disabled = true; b.textContent = 'Lendo…'; await lerSuprimentosAgora(); renderSuprimentosResumo(); });
+}
+
+// trocas no período: quantas por item e por código (o que foi gasto) e a lista
+async function desenharTrocas() {
+  const box = $('#srTrocas'); if (!box) return;
+  const dias = SR.diasTr || 90;
+  box.innerHTML = '<p class="muted">Carregando…</p>';
+  const r = await api(`api/suprimentos/trocas?dias=${dias}`).catch(() => null);
+  const j = r && r.ok ? await r.json() : null;
+  if (!j) { box.innerHTML = '<p class="muted">Não foi possível carregar as trocas.</p>'; return; }
+  const trocas = j.trocas.filter(t => casaCategoria(t.local, SR.cat));
+  const porItem = ['preto', 'azul', 'magenta', 'amarelo', 'caixa'].map(k => [k, trocas.filter(t => t.item === k).length]).filter(([, n]) => n);
+  const porCod = new Map();
+  for (const t of trocas) { const k = t.codigo || '—|' + t.item + '|' + (t.modelo || ''); const g = porCod.get(k) || { cod: t.codigo, item: t.item, modelo: t.modelo, n: 0, selbs: new Set() }; g.n++; g.selbs.add(t.selb); porCod.set(k, g); }
+  const cods = [...porCod.values()].sort((a, b) => b.n - a.n);
+  box.innerHTML = !trocas.length ? tabelaTrocas([], true, dias) : `
+    <div class="tr-resumo"><div class="stat"><div class="stat-tx"><div class="v">${trocas.length}</div><div class="l">troca${trocas.length > 1 ? 's' : ''} em ${esc(periodoTxt(dias))}</div></div></div>
+      <div class="tr-itens">${porItem.map(([k, n]) => `<span class="sup-tag-n"><span class="it-bola it-${k}">${k === 'caixa' ? IC('caixa') : ''}</span>${SUP_NOME[k]} <b>${n}</b></span>`).join('')}</div></div>
+    <h3 class="sr-h3">Por código</h3>
+    <div class="tablewrap"><table><thead><tr><th class="nosort">Código</th><th class="nosort">Item</th><th class="nosort t">Trocas</th><th class="nosort">Impressoras</th></tr></thead><tbody>
+      ${cods.map(g => `<tr><td class="mono"><b>${esc(g.cod || '—')}</b>${g.cod ? '' : ' <small class="muted">sem código</small>'}</td>
+        <td><span class="sup-tag-n"><span class="it-bola it-${g.item}">${g.item === 'caixa' ? IC('caixa') : ''}</span>${esc(SUP_NOME[g.item])}</span> <small class="muted">${esc(g.modelo || '')}</small></td>
+        <td class="t"><b>${g.n}</b></td><td><small>${[...g.selbs].slice(0, 10).map(esc).join(', ')}${g.selbs.size > 10 ? '…' : ''}</small></td></tr>`).join('')}</tbody></table></div>
+    <h3 class="sr-h3">Todas as trocas</h3>
+    ${tabelaTrocas(trocas.slice(0, 500), true, dias)}${trocas.length > 500 ? '<p class="muted">Mostrando as 500 mais recentes.</p>' : ''}`;
+  box.querySelectorAll('tr[data-imp]').forEach(tr => { tr.style.cursor = 'pointer'; tr.addEventListener('click', () => { location.hash = 'receb/impressoras~' + encodeURIComponent(tr.dataset.imp); }); });
 }
 
 // tabela de códigos por modelo (GET/PUT api/suprimentos/codigos)
@@ -466,7 +500,9 @@ async function renderImpressora(selb) {
         <button class="btn ghost small" id="impSuprUm">${IC('caixa')}Ler agora</button></div></div>
       ${!supDe(selb) ? vazioHtml('caixa', 'Ainda sem leitura', `A leitura é automática a cada ${SUP.dados ? SUP.dados.horas : 6} h; use "Ler agora" ou "Testar leitura" no cadastro do SELB.`)
         : supDe(selb).ok ? suprimentosHtml(supDe(selb).itens, selb) : `<p class="err">${IC('alerta')} ${esc(supDe(selb).erro)}</p>`}
-      <div id="impSupHist"></div></div>
+      <div class="head-row sup-hist-cab"><h3>Histórico dos níveis e trocas</h3>
+        <div class="seg2" role="group" aria-label="Período do histórico">${PERIODOS_SUP.map(([d, t]) => `<label class="seg-op"><input type="radio" name="supDias" value="${d}" ${d === MON.diasSup ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div></div>
+      <div id="impSupHist"><p class="muted">Carregando o histórico…</p></div><div id="impTrocas"></div></div>
     <div class="panel"><div class="head-row"><h2>Linha do tempo</h2><small class="muted">faixas de 15 min · ${pings.length} verificações</small></div>
       ${pings.length ? linhaDoTempo(pings, dias) + legendaStatus() : vazioHtml('grafico', 'Sem verificações no período', 'O histórico começa a partir do cadastro do IP.')}</div>
     <div class="panel"><div class="head-row"><h2>Latência (últimas 24 h)</h2><small class="muted">aproximada: o ping usa pacote mínimo, sem carimbo de tempo</small></div>
@@ -479,16 +515,38 @@ async function renderImpressora(selb) {
   ligarPausa(el, () => renderImpressora(selb));
   ligarLatencia($('#impLat'));
   $('#impSuprUm').addEventListener('click', async e => { e.currentTarget.disabled = true; e.currentTarget.textContent = 'Lendo…'; await lerSuprimentosAgora(selb); renderImpressora(selb); });
-  // histórico dos níveis (90 dias)
-  api(`api/suprimentos/historico?selb=${encodeURIComponent(selb)}&dias=90`).then(x => x.ok ? x.json() : null).then(h => {
-    const box = $('#impSupHist');
-    if (box && h && h.pontos.length >= 2) { box.innerHTML = graficoSuprimentos(h.pontos); ligarGraficoSup(box); }
-  }).catch(() => {});
+  // histórico dos níveis e trocas no período escolhido (7 dias a 1 ano)
+  const carregarHist = async () => {
+    const box = $('#impSupHist'), tb = $('#impTrocas');
+    if (!box) return;
+    box.innerHTML = '<p class="muted">Carregando o histórico…</p>';
+    const [h, tr] = await Promise.all([
+      api(`api/suprimentos/historico?selb=${encodeURIComponent(selb)}&dias=${MON.diasSup}`).then(x => x.ok ? x.json() : null).catch(() => null),
+      api(`api/suprimentos/trocas?selb=${encodeURIComponent(selb)}&dias=${MON.diasSup}`).then(x => x.ok ? x.json() : null).catch(() => null)]);
+    const trocas = tr ? tr.trocas : [];
+    box.innerHTML = h && h.pontos.length >= 2 ? graficoSuprimentos(h.pontos, trocas) : `<p class="muted">${h ? 'Ainda não há leituras suficientes neste período.' : 'Histórico indisponível sem conexão.'}</p>`;
+    ligarGraficoSup(box);
+    tb.innerHTML = tabelaTrocas(trocas, false, MON.diasSup);
+  };
+  el.querySelectorAll('input[name="supDias"]').forEach(rd => rd.addEventListener('change', () => { MON.diasSup = +rd.value; carregarHist(); }));
+  carregarHist();
+}
+const PERIODOS_SUP = [[7, '7 dias'], [30, '30 dias'], [90, '90 dias'], [180, '6 meses'], [365, '1 ano']];
+const periodoTxt = d => (PERIODOS_SUP.find(p => p[0] === d) || [d, d + ' dias'])[1];
+// tabela das trocas (detalhe da impressora e aba Suprimentos)
+function tabelaTrocas(trocas, comImpressora, dias) {
+  if (!trocas.length) return `<p class="muted">${IC('check')} Nenhuma troca de tinta, toner ou caixa detectada ${dias ? 'em ' + periodoTxt(dias) : 'no período'}.</p>`;
+  return `<div class="tablewrap"><table><thead><tr><th class="nosort">Quando</th>${comImpressora ? '<th class="nosort">Impressora</th>' : ''}<th class="nosort">Item</th><th class="nosort">Nível</th><th class="nosort">Código</th></tr></thead><tbody>
+    ${trocas.map(t => `<tr${comImpressora ? ` data-imp="${esc(t.selb)}"` : ''}><td class="t">${dataHora(t.t)}<br><small class="muted">${new Date(t.t).getFullYear()}</small></td>
+      ${comImpressora ? `<td><b>${esc(t.selb)}</b> <span class="muted">${esc(t.modelo || '')}</span>${t.local ? `<br><small>${esc(t.localPrincipal ? t.localPrincipal + ' › ' + t.local : t.local)}</small>` : ''}</td>` : ''}
+      <td><span class="sup-tag-n"><span class="it-bola it-${esc(t.item)}">${t.item === 'caixa' ? IC('caixa') : ''}</span>${esc(SUP_NOME[t.item] || t.item)}</span></td>
+      <td class="t">${t.de}% → <b>${t.para}%</b></td><td class="mono">${esc(t.codigo || '—')}</td></tr>`).join('')}</tbody></table></div>
+    <p class="muted"><small>Troca = o nível subiu de repente entre duas leituras (ex.: 4% → 100%). ${trocas.some(t => t.origem === 'historico') ? 'As mais antigas foram encontradas no histórico de níveis.' : ''}</small></p>`;
 }
 
 // histórico dos níveis: uma linha por tinta/toner/caixa, nas cores reais, com legenda e cursor
 const COR_LINHA = { preto: '#1f2430', azul: '#0891b2', magenta: '#db2777', amarelo: '#ca8a04', caixa: '#64748b' };
-function graficoSuprimentos(pontos) {
+function graficoSuprimentos(pontos, trocas = []) {
   const W = 900, Hh = 220, m = { l: 40, r: 12, t: 12, b: 26 };
   const t0 = Date.parse(pontos[0].t), t1 = Math.max(Date.parse(pontos[pontos.length - 1].t), t0 + 3600000);
   const X = t => m.l + (t - t0) / (t1 - t0) * (W - m.l - m.r), Y = v => Hh - m.b - v / 100 * (Hh - m.t - m.b);
@@ -500,17 +558,21 @@ function graficoSuprimentos(pontos) {
   const dias = Math.max(1, Math.round((t1 - t0) / 86400000));
   // período curto (< 2 dias): mostra a hora; senão, o dia
   const rot = t => { const d = new Date(t); return t1 - t0 < 2 * 86400000 ? hora(d.toISOString()) : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`; };
-  const marcas = [0, 0.5, 1].map(f => { const t = t0 + f * (t1 - t0); return `<text x="${X(t)}" y="${Hh - 6}" text-anchor="${f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}">${rot(t)}</text>`; }).join('');
+  const marcas = (t1 - t0 > 20 * 86400000 ? [0, 0.25, 0.5, 0.75, 1] : [0, 0.5, 1]).map(f => { const t = t0 + f * (t1 - t0); return `<text x="${X(t)}" y="${Hh - 6}" text-anchor="${f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}">${rot(t)}</text>`; }).join('');
   const linhas = chaves.map(k => `<path d="${series[k].map(([t, v], j) => `${j ? 'L' : 'M'}${X(t).toFixed(1)},${Y(v).toFixed(1)}`).join('')}" class="linha" style="stroke:${COR_LINHA[k]}"${k === 'caixa' ? ' stroke-dasharray="5 4"' : ''}/>`).join('');
-  return `<h3>Histórico dos níveis <small class="muted">(${dias} dia${dias > 1 ? 's' : ''})</small></h3>
+  // trocas: linha vertical tracejada + ponto no nível novo, na cor do item (com anel na cor do fundo)
+  const tr = trocas.filter(t => { const x = Date.parse(t.t); return x >= t0 && x <= t1; });
+  const marcasTroca = tr.map(t => { const x = X(Date.parse(t.t)).toFixed(1); return `<line x1="${x}" x2="${x}" y1="${m.t}" y2="${Hh - m.b}" class="troca"/><circle cx="${x}" cy="${Y(t.para).toFixed(1)}" r="4.5" class="troca-pt" style="fill:${COR_LINHA[t.item] || '#64748b'}"/>`; }).join('');
+  return `<p class="muted sup-hist-info">${dias} dia${dias > 1 ? 's' : ''} de leituras${tr.length ? ` · ${tr.length} troca${tr.length > 1 ? 's' : ''} (linhas tracejadas)` : ''}</p>
     <div class="mon-legenda">${chaves.map(k => `<span><i style="background:${COR_LINHA[k]}"></i>${SUP_NOME[k]}${k === 'caixa' ? ' (% vida útil)' : ''}</span>`).join('')}</div>
-    <div class="mon-lat" data-series='${JSON.stringify(Object.fromEntries(chaves.map(k => [k, series[k]])))}' data-t0="${t0}" data-t1="${t1}">
-      <svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Histórico dos níveis de tinta, toner e caixa">${grade}${marcas}${linhas}<line class="cursor" y1="${m.t}" y2="${Hh - m.b}" x1="-10" x2="-10"/></svg>
+    <div class="mon-lat" data-series='${JSON.stringify(Object.fromEntries(chaves.map(k => [k, series[k]])))}' data-trocas='${esc(JSON.stringify(tr.map(t => [Date.parse(t.t), t.item, t.de, t.para, t.codigo || ''])))}' data-t0="${t0}" data-t1="${t1}">
+      <svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Histórico dos níveis de tinta, toner e caixa">${grade}${marcas}${linhas}${marcasTroca}<line class="cursor" y1="${m.t}" y2="${Hh - m.b}" x1="-10" x2="-10"/></svg>
       <div class="mon-dica" hidden></div></div>`;
 }
 function ligarGraficoSup(box) {
   const g = box.querySelector('.mon-lat');
   if (!g) return;
+  const TR = JSON.parse(g.dataset.trocas || '[]');
   const S = JSON.parse(g.dataset.series), t0 = +g.dataset.t0, t1 = +g.dataset.t1, svg = g.querySelector('svg'), cur = g.querySelector('.cursor'), dica = g.querySelector('.mon-dica');
   const W = 900, m = { l: 40, r: 12 };
   svg.addEventListener('mousemove', e => {
@@ -522,7 +584,9 @@ function ligarGraficoSup(box) {
     const d = new Date(perto);
     dica.hidden = false;
     dica.innerHTML = `<b>${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${hora(d.toISOString())}</b><br>` +
-      Object.entries(S).map(([k, pts]) => { const p = pts.find(q => q[0] === perto); return p ? `${SUP_NOME[k]}: ${p[1]}%` : ''; }).filter(Boolean).join('<br>');
+      Object.entries(S).map(([k, pts]) => { const p = pts.find(q => q[0] === perto); return p ? `${SUP_NOME[k]}: ${p[1]}%` : ''; }).filter(Boolean).join('<br>') +
+      // troca nessa leitura (ou a menos de meia leitura dela)
+      TR.filter(x => Math.abs(x[0] - perto) < 60000).map(x => `<br><b>Troca:</b> ${SUP_NOME[x[1]]} ${x[2]}% → ${x[3]}%${x[4] ? ` · ${esc(x[4])}` : ''}`).join('');
     dica.style.left = `${px / W * 100}%`; dica.style.top = '30%';
   });
   svg.addEventListener('mouseleave', () => { dica.hidden = true; cur.setAttribute('x1', -10); cur.setAttribute('x2', -10); });
