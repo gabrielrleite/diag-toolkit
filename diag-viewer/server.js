@@ -1295,6 +1295,7 @@ async function rodadaSuprimentos({ selb = '', forcar = false } = {}) {
         const ant = supr.selbs[chaveSelbRec(c.selb)];
         supr.selbs[chaveSelbRec(c.selb)] = { selb: c.selb, ...r };
         if (r.ok) await alertasSuprimento(c, ant, r);
+        if (r.ok) await registrarTrocas(c, ant, r).catch(e => console.error('trocas:', e.message));
         if (r.ok) linhas.push(JSON.stringify({ t: r.lidoEm, s: c.selb, i: r.itens.map(i => [i.item, i.pct, i.estado, i.desc]) }));
       }
     };
@@ -1378,6 +1379,51 @@ async function catalogoCodigos() {
 }
 const codsDoModelo = (cat, m) => m && cat.get(m.chave) ? Object.fromEntries(Object.entries(cat.get(m.chave).codigos).map(([k, v]) => [k, v.cod])) : {};
 
+// ---- trocas de tinta/toner/caixa: o nível de um item sobe de repente entre duas leituras
+// (ex.: 4% -> 100%). Fica em monitor/trocas.json (não expira com o histórico de níveis).
+const TROCAS_FILE = path.join(MON_DIR, 'trocas.json');
+const TROCA_SALTO = 25, TROCA_MIN = 50; // subiu pelo menos 25 pontos e foi a 50% ou mais
+async function lerTrocas() { try { return JSON.parse(await fsp.readFile(TROCAS_FILE, 'utf8')); } catch { return null; } }
+const ehTroca = (de, para) => de != null && para != null && para - de >= TROCA_SALTO && para >= TROCA_MIN;
+async function registrarTrocas(c, ant, r) {
+  if (!ant || !ant.ok || !ant.itens) return;
+  const antes = new Map(ant.itens.map(i => [i.item + '|' + i.idx, i]));
+  const novas = [];
+  for (const i of r.itens) {
+    if (i.item === 'outro') continue;
+    const a = antes.get(i.item + '|' + i.idx);
+    if (a && ehTroca(a.pct, i.pct)) novas.push({ item: i.item, de: a.pct, para: i.pct, desc: i.desc, codigo: i.codigo });
+  }
+  if (!novas.length) return;
+  const cods = { ...codsDoModelo(await catalogoCodigos(), modeloDoSelb(c, r)), ...RecebOCR.codigosObs(c.obs, c.cor === 'pb') };
+  const loc = ((await ultimosLocais()).get(chaveSelbRec(c.selb)) || {}).local || '';
+  const regs = novas.map(n => ({ id: crypto.randomBytes(5).toString('hex'), t: r.lidoEm, selb: c.selb, item: n.item, de: n.de, para: n.para,
+    codigo: n.codigo || cods[n.item] || '', local: loc, modelo: [c.marca, c.modelo].filter(Boolean).join(' ') || r.modelo || '', origem: 'leitura' }));
+  await withLock('trocas', async () => { const l = (await lerTrocas()) || []; l.push(...regs); await writeJsonAtomic(TROCAS_FILE, l.slice(-50000)); });
+  for (const t of regs) await audit({ acao: 'suprimento_trocado', selb: t.selb, item: t.item, de: t.de, para: t.para, codigo: t.codigo });
+}
+// primeira vez: procura trocas no histórico de níveis já guardado (suprimentos-AAAA-MM.jsonl)
+async function trocasDoHistorico() {
+  if (await lerTrocas()) return;
+  const cads = new Map((await lerSelbsCad()).selbs.map(c => [chaveSelbRec(c.selb), c]));
+  const ult = new Map(), out = [];
+  for (const n of (await fsp.readdir(MON_DIR).catch(() => [])).filter(n => /^suprimentos-\d{4}-\d{2}\.jsonl$/.test(n)).sort()) {
+    for (const l of (await fsp.readFile(path.join(MON_DIR, n), 'utf8').catch(() => '')).split('\n')) {
+      let o; try { o = l && JSON.parse(l); } catch { o = null; }
+      if (!o || !Array.isArray(o.i)) continue;
+      for (const [item, pct, , desc] of o.i) {
+        if (item === 'outro') continue;
+        const k = chaveSelbRec(o.s) + '|' + item + '|' + desc, a = ult.get(k);
+        if (a != null && ehTroca(a, pct)) { const c = cads.get(chaveSelbRec(o.s)) || {}; out.push({ id: crypto.randomBytes(5).toString('hex'), t: o.t, selb: o.s, item, de: a, para: pct, codigo: '', local: c.local || '', modelo: [c.marca, c.modelo].filter(Boolean).join(' '), origem: 'historico' }); }
+        if (pct != null) ult.set(k, pct);
+      }
+    }
+  }
+  await withLock('trocas', async () => { if (!(await lerTrocas())) await writeJsonAtomic(TROCAS_FILE, out); });
+  if (out.length) console.log(`trocas encontradas no histórico: ${out.length}`);
+}
+setTimeout(() => trocasDoHistorico().catch(e => console.error('trocas:', e.message)), 3000).unref();
+
 async function suprimentosRoute(req, res, url, acao) {
   if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
   if (acao === 'testar') {
@@ -1414,6 +1460,19 @@ async function suprimentosRoute(req, res, url, acao) {
       if (Object.keys(dif).length) sugestoes.push({ selb: c.selb, lidoEm: r.lidoEm, modeloLido: r.modelo, dif });
     }
     return json(res, 200, { sugestoes });
+  } else if (acao === 'trocas') {
+    if (req.method !== 'GET') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+    const dias = Math.max(1, Math.min(3650, +url.searchParams.get('dias') || 90)), desde = Date.now() - dias * 86400000;
+    const selb = txt(url.searchParams.get('selb'), 40).trim();
+    // código e local atuais para as trocas antigas que não tinham (achadas no histórico)
+    const cat = await catalogoCodigos(), cads = new Map((await lerSelbsCad()).selbs.map(c => [chaveSelbRec(c.selb), c]));
+    const locs = await ultimosLocais(), principal = principalDe((await lerLocais()).locais);
+    const trocas = ((await lerTrocas()) || []).filter(t => Date.parse(t.t) >= desde && (!selb || chaveSelbRec(t.selb) === chaveSelbRec(selb))).reverse().map(t => {
+      const c = cads.get(chaveSelbRec(t.selb)), local = t.local || ((locs.get(chaveSelbRec(t.selb)) || {}).local || '');
+      return { ...t, codigo: t.codigo || (c ? { ...codsDoModelo(cat, modeloDoSelb(c, supr.selbs[chaveSelbRec(t.selb)])), ...RecebOCR.codigosObs(c.obs, c.cor === 'pb') }[t.item] || '' : ''),
+        local, localPrincipal: principal(local), modelo: t.modelo || (c ? [c.marca, c.modelo].filter(Boolean).join(' ') : '') };
+    });
+    return json(res, 200, { dias, maxDias: SUPR_DIAS, trocas });
   } else if (acao === 'codigos') {
     if (req.method === 'PUT') {
       // grava os códigos digitados de um modelo ({chave, nome, codigos: {item: código}}); vazio = volta ao aprendido
@@ -2135,7 +2194,7 @@ const server = http.createServer(async (req, res) => {
     if (oc) return await ocrRoute(req, res, url, oc[1]);
     const tr = p.match(/^\/api\/treino(?:\/(config|exemplos|esquecer|exportar\.zip))?$/);
     if (tr) return await treinoRoute(req, res, url, tr[1]);
-    const su = p.match(/^\/api\/suprimentos(?:\/(ler|testar|historico|cadastro|codigos))?$/);
+    const su = p.match(/^\/api\/suprimentos(?:\/(ler|testar|historico|cadastro|codigos|trocas))?$/);
     if (su) return await suprimentosRoute(req, res, url, su[1]);
     const mo = p.match(/^\/api\/monitor(?:\/(verificar|pausa|historico|quedas|alertas|alerta-teste))?$/);
     if (mo) return await monitorRoute(req, res, url, mo[1]);

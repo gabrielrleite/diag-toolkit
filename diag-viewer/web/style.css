@@ -992,3 +992,14 @@ body.com-offbarra main { padding-bottom: 120px; }
 .off-token { margin-top: 8px; }
 .off-token .filters { margin: 0; flex-wrap: wrap; }
 .off-token input[type="password"] { min-width: 0 !important; flex: 1 1 160px; }
+
+/* trocas de suprimento */
+.sup-hist-cab { margin-top: 14px; flex-wrap: wrap; gap: 8px; }
+.sup-hist-cab h3 { margin: 0; font-size: 14px; }
+.sup-hist-info { margin: 4px 0 6px; font-size: 12.5px; }
+.mon-lat svg line.troca { stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 3 3; opacity: .7; }
+.mon-lat svg circle.troca-pt { stroke: var(--panel); stroke-width: 2; }
+.sup-tag-n { display: inline-flex; align-items: center; gap: 6px; }
+.tr-resumo { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-bottom: 6px; }
+.tr-resumo .stat { min-width: 150px; }
+.tr-itens { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13.5px; }
