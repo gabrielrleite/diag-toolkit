@@ -456,7 +456,7 @@ function ligarFormLocal(L) {
 async function renderSelbs(editar = '') {
   const el = $('#mod-receb');
   el.innerHTML = abasReceb('selbs') + '<div class="panel">Carregando...</div>';
-  if (!(await needServer(el))) return;
+  if (!(await needServer(el, { offline: true }))) return;
   const [regs, , cads] = await Promise.all([carregarEntregas(), carregarLocais(), carregarSelbsCad(), atualizarMonitor()]);
   const mapa = new Map();
   const novoS = sel => ({ selb: sel.toUpperCase(), n: 0, locais: new Map(), ult: null, itens: new Map() });
@@ -514,7 +514,7 @@ async function renderSelbs(editar = '') {
         const itens = [...s.itens.entries()].map(([key, qtd]) => { const [item, tipo] = key.split('|'); return { selb: s.selb, item, tipo, qtd }; })
           .sort((a, b) => Object.keys(ITENS).indexOf(a.item) - Object.keys(ITENS).indexOf(b.item));
         return `<tr class="${s.locais.size > 1 ? 'rb-multi' : ''}">
-          <td><b>${esc(s.selb)}</b>${s.locais.size > 1 ? ' <span class="badge warn">mais de um local</span>' : ''}
+          <td><b>${esc(s.selb)}</b>${s.locais.size > 1 ? ' <span class="badge warn">mais de um local</span>' : ''}${c && c.pendente ? ' <span class="badge" title="Alterado sem conexão: será enviado ao servidor quando ele voltar">aguardando envio</span>' : ''}
             <br>${c ? `<small>${esc(resumoEquip(c, false))}</small>${c.ip ? ` <a class="ip-link" href="http://${esc(c.ip)}" target="_blank" rel="noopener" title="Abrir o painel da impressora">${situacaoHtml(c.ip)}${esc(c.ip)}</a>${repetidos.has(c.ip) ? ` <span class="badge bad" title="Mesmo IP em: ${esc([...RB.selbsCad.values()].filter(x => x.ip === c.ip).map(x => x.selb).join(', '))}">IP repetido</span>` : ''}` : ''}${c.obs ? `<br><small class="it-obs" title="${esc(c.obs)}">${IC('tag')} ${esc(c.obs.slice(0, 70))}${c.obs.length > 70 ? '…' : ''}</small>` : ''}` : '<span class="badge">sem cadastro</span>'}</td>
           <td>${s.n ? `<button class="linklike" data-ver="${esc(s.selb)}">${s.n}</button>` : '0'}</td>
           <td>${itens.length ? itensHtml(itens, false) : '<span class="muted">—</span>'}</td>
@@ -662,7 +662,7 @@ function formSelb(c, uso) {
       <label>Nº de série <input id="sfSerie" value="${esc(c.serie || '')}" maxlength="80"></label>
       <label class="sf-local">Local vinculado <input id="sfLocal" value="${esc(c.local || '')}" maxlength="160" list="sfDlLocal" placeholder="${uso && uso.ult && uso.ult.local ? 'pelas entregas: ' + esc(uso.ult.local) : 'ex.: Escola X › Sala 3'}" autocomplete="off"></label>
       <datalist id="sfDlLocal">${[...new Set([...CAD.locais.map(L => L.nome), ...(uso ? [...uso.locais.values()].map(o => o.nome) : [])])].sort().map(v => `<option value="${esc(v)}">`).join('')}</datalist>
-      <label>IP da impressora <input id="sfIp" value="${esc(c.ip || IP_PREFIXO)}" maxlength="15" inputmode="decimal" placeholder="ex.: 192.168.0.50" autocomplete="off"><small class="sf-aviso" id="sfIpAviso" hidden></small></label>
+      <label>IP da impressora <input id="sfIp" value="${esc(c.ip || IP_PREFIXO)}" maxlength="31" inputmode="decimal" placeholder="ex.: 192.168.0.50" autocomplete="off"><small class="sf-aviso" id="sfIpAviso" hidden></small></label>
       <label>Comunidade SNMP <input id="sfCom" value="${esc(c.comunidade || '')}" maxlength="64" placeholder="public" autocomplete="off"></label>
       <div class="sf-testar"><span class="lbl">Níveis e dados da impressora</span><button type="button" class="btn ghost" id="sfTestar">${IC('raio')}Testar leitura</button></div>
     </div>
@@ -746,7 +746,12 @@ function ligarFormSelb(c) {
     return !dono || dono.ip === c.ip; // repetição antiga (já salva assim) não trava a edição
   };
   $('#sfSelb').addEventListener('input', checarSelb);
-  $('#sfIp').addEventListener('input', checarIp);
+  // colou/digitou o IP inteiro por cima do "192.168." já escrito: fica só o IP
+  $('#sfIp').addEventListener('input', e => {
+    const t = e.target, m = t.value.trim().match(/^192\.168\.((?:\d{1,3}\.){3}\d{1,3})$/);
+    if (m) t.value = m[1];
+    checarIp();
+  });
   // começa com "192.168.": o cursor vai para o fim
   $('#sfIp').addEventListener('focus', e => { const t = e.target; if (t.value === IP_PREFIXO) setTimeout(() => t.setSelectionRange(t.value.length, t.value.length)); });
   checarIp();

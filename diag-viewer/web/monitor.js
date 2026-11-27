@@ -227,7 +227,7 @@ function cartaoSup(i) {
 async function renderSuprimentosResumo() {
   const el = $('#mod-receb');
   el.innerHTML = abasReceb('suprimentos') + '<div class="panel">Carregando...</div>';
-  if (!(await needServer(el))) return;
+  if (!(await needServer(el, { offline: true }))) return;
   await Promise.all([atualizarMonitor(), carregarSelbsCad(), carregarLocais()]);
   const D = MON.dados;
   if (!D) { el.innerHTML = abasReceb('suprimentos') + '<div class="panel"><p class="err">Não foi possível carregar as impressoras.</p></div>'; return; }
@@ -357,7 +357,7 @@ async function renderImpressoras(arg = '') {
   const el = $('#mod-receb');
   if (arg) return renderImpressora(arg);
   el.innerHTML = abasReceb('impressoras') + '<div class="panel">Carregando...</div>';
-  if (!(await needServer(el))) return;
+  if (!(await needServer(el, { offline: true }))) return;
   await Promise.all([atualizarMonitor(), carregarSelbsCad()]);
   const D = MON.dados;
   const rq = await api('api/monitor/quedas?dias=30').catch(() => null);
@@ -439,7 +439,7 @@ async function renderImpressoras(arg = '') {
 async function renderImpressora(selb) {
   const el = $('#mod-receb');
   el.innerHTML = abasReceb('impressoras') + '<div class="panel">Carregando...</div>';
-  if (!(await needServer(el))) return;
+  if (!(await needServer(el, { offline: true }))) return;
   if (!MON.dados) await atualizarMonitor();
   const i = MON.dados && MON.dados.impressoras.find(x => RecebOCR.chaveSelb(x.selb) === RecebOCR.chaveSelb(selb));
   const dias = MON.diasDet;

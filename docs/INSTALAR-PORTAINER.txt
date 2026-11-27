@@ -107,6 +107,18 @@ ALERTAS (tinta/toner/caixa com 25% ou menos, impressora caiu/voltou):
   nome-dificil-de-adivinhar, e instale o app ntfy no celular). Depois
   de "Update the stack", use "Enviar alerta de teste" na aba Impressoras.
 
+IMPRESSORAS SEM CONEXÃO COM O SERVIDOR (offline):
+  As abas SELBs, Impressoras e Suprimentos continuam funcionando com a
+  última cópia salva no navegador. Alterações (cadastro do SELB, códigos,
+  pausas) ficam numa fila e são enviadas quando o servidor volta; uma
+  barra no canto da tela mostra o que está pendente.
+  - Com a página já aberta: funciona em qualquer endereço.
+  - Para ABRIR a página sem o servidor, o navegador exige HTTPS. Em
+    http://IP-DO-SERVIDOR, no Chrome/Edge de cada computador da equipe:
+      chrome://flags/#unsafely-treat-insecure-origin-as-secure
+    adicione http://IP-DO-SERVIDOR, ative e reinicie o navegador; depois
+    abra a Central uma vez com o servidor no ar.
+
 MODO TREINAMENTO (Recebimentos > Treinamento):
   Ligado por padrão. Cada linha CONFERIDA guarda o que o OCR leu em Local,
   SELB e Data e o texto final (com o recorte dessas células; CPF, nome e
