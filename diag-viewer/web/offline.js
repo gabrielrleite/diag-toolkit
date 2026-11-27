@@ -9,9 +9,9 @@ const OFF = { online: true, desde: null, fila: [], mem: new Map(), dbp: null, si
 // leituras guardadas para uso offline (caminho sem a barra inicial)
 const OFF_GET = [/^api\/monitor(\?|$)/, /^api\/monitor\/(quedas|alertas|historico)(\?|$)/, /^api\/suprimentos(\?|$)/,
   /^api\/suprimentos\/(codigos|historico|cadastro)(\?|$)/, /^api\/receb-selbs$/, /^api\/receb-locais(\/categorias)?$/,
-  /^api\/receb-textos$/, /^api\/recebimentos\?linhas=1$/];
+  /^api\/receb-textos$/, /^api\/recebimentos\?linhas=1$/, /^api\/receb-entrega-campos$/];
 // alterações que podem esperar na fila
-const OFF_FILA = [[/^api\/receb-selbs\/[^/?]+$/, ['PUT', 'DELETE']], [/^api\/suprimentos\/codigos$/, ['PUT']], [/^api\/monitor\/pausa(\?|$)/, ['POST', 'DELETE']]];
+const OFF_FILA = [[/^api\/recebimentos\/manual$/, ['POST']], [/^api\/receb-selbs\/[^/?]+$/, ['PUT', 'DELETE']], [/^api\/suprimentos\/codigos$/, ['PUT']], [/^api\/monitor\/pausa(\?|$)/, ['POST', 'DELETE']]];
 
 // ---------------------------------------------------------------- armazenamento (IndexedDB; sem ele, só memória)
 function offDb() {
@@ -103,6 +103,7 @@ async function apiOffline(path, opts = {}) {
 function descreverAlteracao(k, metodo, corpo) {
   const sel = decodeURIComponent((k.match(/^api\/receb-selbs\/([^/?]+)/) || [])[1] || '');
   if (sel) return metodo === 'DELETE' ? `Excluir o cadastro do SELB ${sel}` : `Cadastro do SELB ${sel}${corpo && corpo.local ? ` (local ${corpo.local})` : ''}`;
+  if (k === 'api/recebimentos/manual') return `Entrega manual${corpo ? ` · ${corpo.local || ''} · ${corpo.selb || ''}${corpo.assinatura ? ' · assinada' : ''}${corpo.fotos && corpo.fotos.length ? ` · ${corpo.fotos.length} foto(s)` : ''}` : ''}`;
   if (k.startsWith('api/suprimentos/codigos')) return `Códigos do modelo ${(corpo && corpo.nome) || ''}`;
   if (k.startsWith('api/monitor/pausa')) {
     if (metodo === 'DELETE') { const alvo = decodeURIComponent((k.match(/alvo=([^&]+)/) || [])[1] || ''); return alvo === 'todos' ? 'Retomar o monitoramento' : `Retomar ${alvo}`; }
@@ -124,9 +125,10 @@ async function enfileirar(k, metodo, bodyTxt) {
   }
   const it = { id: Date.now() * 1000 + Math.floor(Math.random() * 1000), quando: new Date().toISOString(), metodo, path: k, body: bodyTxt || null, desc: descreverAlteracao(k, metodo, corpo) };
   await filaGravar(it);
-  for (const p of ['api/receb-selbs', 'api/monitor', 'api/suprimentos/codigos']) await aplicarLocal(it, p);
+  for (const p of ['api/receb-selbs', 'api/monitor', 'api/suprimentos/codigos', 'api/recebimentos?linhas=1']) await aplicarLocal(it, p);
   desenharBarraOffline();
   if (sel && metodo === 'PUT') return respJson({ selb: sel.toUpperCase(), ...(corpo || {}), offline: true }, 200, { 'X-Offline-Fila': '1' });
+  if (k === 'api/recebimentos/manual') return respJson({ id: 'pendente-' + ((corpo && corpo.idCliente) || it.id), offline: true }, 200, { 'X-Offline-Fila': '1' });
   return respJson({ ok: true, offline: true }, 200, { 'X-Offline-Fila': '1' });
 }
 // aplica uma alteração da fila na cópia guardada (para a tela já mostrar o que foi feito)
@@ -150,6 +152,17 @@ async function aplicarLocal(it, p) {
     if (alvo === 'todos') D.pausa = pausa;
     else for (const imp of D.impressoras || []) if (ks(imp.selb) === ks(alvo)) imp.pausada = pausa;
     return D;
+  });
+  // entrega manual feita offline: aparece na lista de entregas como "aguardando envio" (sem as imagens)
+  if (p === 'api/recebimentos?linhas=1' && it.path === 'api/recebimentos/manual' && corpo) await cacheEditar(p, lista => {
+    const id = 'pendente-' + (corpo.idCliente || it.id);
+    if (lista.some(f => f.id === id)) return lista;
+    const [a, m, d] = String(corpo.dataIso || '').split('-');
+    const cfg = (typeof EM !== 'undefined' && EM.cfg) || { campos: [] };
+    const campos = Object.fromEntries(Object.entries(corpo.campos || {}).filter(([, v]) => v).map(([k, v]) => [k, { rotulo: (cfg.campos.find(c => c.id === k) || {}).rotulo || k, valor: v === 'nao' ? 'não' : v }]));
+    lista.unshift({ id, titulo: `Entrega manual · ${corpo.local}`, dataFolha: corpo.dataIso, criadoEm: it.quando, atualizadoEm: it.quando, revisao: 0, manual: { recebedor: corpo.recebedor, documento: corpo.documento, hora: corpo.hora, campos, termo: cfg.termo, feitaEm: corpo.feitaEm, fotos: [] }, pendente: true,
+      total: 1, pendentes: 0, obs: corpo.obs, linhas: [{ n: 1, revisado: true, local: corpo.local, selb: corpo.selb, data: d ? `${d}/${m}/${a}` : '', dataIso: corpo.dataIso, nome: corpo.recebedor, itens: corpo.itens || [] }] });
+    return lista;
   });
   if (p === 'api/suprimentos/codigos' && it.path.startsWith('api/suprimentos/codigos') && corpo) await cacheEditar(p, D => {
     const m = (D.modelos || []).find(x => x.chave === corpo.chave);
@@ -182,7 +195,7 @@ async function sincronizarFila() {
     desenharBarraOffline();
   }
   // tudo enviado: recarrega a tela com os dados do servidor (menos em formulário aberto)
-  if (enviados && !parou && !OFF.fila.some(x => !x.erro) && /^#receb\/(selbs|impressoras|suprimentos)$/.test(location.hash)) route();
+  if (enviados && !parou && !OFF.fila.some(x => !x.erro) && /^#receb(\/(selbs|impressoras|suprimentos))?$/.test(location.hash)) route();
 }
 let offTimer = null;
 function agendarTentativa() {
@@ -198,8 +211,9 @@ function desenharBarraOffline() {
   let b = document.getElementById('offBarra');
   if (!b) { b = document.createElement('div'); b.id = 'offBarra'; b.className = 'off-barra'; b.setAttribute('role', 'status'); document.body.appendChild(b); }
   const pend = OFF.fila.filter(x => !x.erro), recus = OFF.fila.filter(x => x.erro);
-  if (OFF.online && !OFF.fila.length) { b.hidden = true; b.classList.remove('aberta'); return; }
+  if (OFF.online && !OFF.fila.length) { b.hidden = true; b.classList.remove('aberta'); document.body.classList.remove('com-offbarra'); return; }
   b.hidden = false;
+  document.body.classList.add('com-offbarra'); // a página ganha espaço embaixo: a barra não cobre botões
   const quando = iso => { const d = new Date(iso); return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const titulo = !OFF.online ? '<b>Sem conexão com o servidor</b> — impressoras, SELBs e suprimentos com a última cópia salva'
     : OFF.sincronizando ? `<b>Enviando ${pend.length} alteração(ões)…</b>` : pend.length ? `<b>${pend.length} alteração(ões) aguardando envio</b>` : `<b>${recus.length} alteração(ões) recusada(s) pelo servidor</b>`;

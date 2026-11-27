@@ -71,6 +71,7 @@ async function renderReceb(arg) {
   }
   RB.dirty = false; RB.cur = null;
   if (arg === 'importar') return renderImportar();
+  if (arg === 'manual') return renderEntregaManual();
   if (arg && arg.split('~')[0] === 'selbs') return renderSelbs(arg.split('~').slice(1).join('~'));
   if (arg === 'treino') return renderTreino();
   if (arg === 'textos') return renderTextosReceb();
@@ -80,24 +81,27 @@ async function renderReceb(arg) {
   if (arg) { const [fid, n] = arg.split('~'); return abrirFolha(fid, +n || 0); }
   RB.imp = null;
   el.innerHTML = abasReceb('entregas') + '<div class="panel">Carregando...</div>';
-  if (!(await needServer(el))) return;
+  if (!(await needServer(el, { offline: true }))) return; // a lista de entregas abre com a cópia guardada
   const [r] = await Promise.all([api('api/recebimentos?linhas=1').catch(() => null), carregarLocais(), carregarSelbsCad()]);
   RB.folhas = r && r.ok ? await r.json() : [];
   const regs = RB.folhas.flatMap(f => f.linhas.map(l => ({ ...l, folha: f })));
   const pend = regs.filter(l => !l.revisado).length;
+  // entregas manuais (assinadas no celular) não são folhas: entram só na lista de recebimentos
+  const folhasOcr = RB.folhas.filter(f => !f.manual), nManuais = RB.folhas.length - folhasOcr.length;
   el.innerHTML = abasReceb('entregas') + `
     <div class="panel">
-      <div class="head-row"><h2>${TX('entregas.folhas')}</h2><a class="btn" href="#receb/importar">${TX('entregas.importar')}</a></div>
+      <div class="head-row"><h2>${TX('entregas.folhas')}</h2><div class="filters" style="margin:0"><a class="btn ghost" href="#receb/manual">${IC('mais')}${TX('entregas.manual')}</a><a class="btn" href="#receb/importar">${TX('entregas.importar')}</a></div></div>
       <div class="stats">
-        ${statHtml(RB.folhas.length, 'folhas', 'arquivo', '')}
+        ${statHtml(folhasOcr.length, 'folhas', 'arquivo', '')}
+        ${nManuais ? statHtml(nManuais, 'entregas manuais', 'check', 'ok') : ''}
         ${statHtml(regs.length, 'recebimentos registrados', 'lista', 'violeta')}
         ${statHtml(regs.reduce((a, l) => a + selbsDe(l.selb).length, 0), 'SELBs entregues', 'tag', 'ok')}
         ${statHtml(regs.reduce((a, l) => a + (l.itens || []).reduce((b, it) => b + it.qtd, 0), 0), 'tintas, toners e caixas', 'caixa', 'violeta')}
         ${statHtml(pend, 'linhas não conferidas', 'alerta', pend ? 'bad' : '')}
       </div>
-      ${!RB.folhas.length ? vazioHtml('caixa', 'Nenhuma folha ainda', 'Clique em "Importar folhas", escolha as fotos, digitalizações ou PDFs e confira o que o OCR leu.') : `
+      ${!folhasOcr.length ? vazioHtml('caixa', 'Nenhuma folha ainda', 'Clique em "Importar folhas", escolha as fotos, digitalizações ou PDFs e confira o que o OCR leu. Para registrar uma entrega na hora, com assinatura no celular, use "Nova entrega manual".') : `
       <div class="tablewrap" style="max-height:34vh"><table class="clickable"><thead><tr><th class="nosort">Folha</th><th class="nosort">Data</th><th class="nosort">Linhas</th><th class="nosort">Conferência</th><th class="nosort">Importada em</th></tr></thead><tbody>
-      ${RB.folhas.map(f => `<tr data-folha="${esc(f.id)}"><td><b>${esc(f.titulo || f.id)}</b><br><small class="mono">${esc(f.id)}</small></td>
+      ${folhasOcr.map(f => `<tr data-folha="${esc(f.id)}"><td><b>${esc(f.titulo || f.id)}</b><br><small class="mono">${esc(f.id)}</small></td>
         <td class="t">${f.dataFolha ? esc(f.dataFolha.split('-').reverse().join('/')) : '—'}</td><td>${f.total}</td>
         <td>${f.pendentes ? `<span class="badge warn">${f.pendentes} a conferir</span>` : '<span class="badge ok">conferida</span>'}</td>
         <td class="t">${fmt(new Date(f.criadoEm)).slice(0, 16)}</td></tr>`).join('')}
@@ -141,8 +145,8 @@ async function renderReceb(arg) {
         <td>${l.local ? `<button class="linklike" data-filtro="local" data-v="${esc(l.local)}" title="${esc((localCadastrado(l.local) ? enderecoTxt(localCadastrado(l.local)) + ' — ' : '') + 'clique para filtrar por este local')}">${esc(l.local)}</button>${principalDoLocal(l.local) ? `<br><button class="linklike sub-principal" data-filtro="local" data-v="${esc(principalDoLocal(l.local).nome)}" title="Local principal: filtrar por ele e todas as salas">${IC('local')}${esc(principalDoLocal(l.local).nome)}</button>` : ''}` : '—'}</td>
         <td>${selbsDe(l.selb).map(x => `<button class="linklike" data-filtro="selb" data-v="${esc(x)}" title="Filtrar por este SELB">${esc(x)}</button>`).join(', ') || '—'}</td>
         <td>${itensHtml(l.itens)}</td>
-        <td class="t">${esc(l.data || '—')}</td>
-        <td><small>${esc(l.folha.titulo || l.folha.id)} · linha ${l.n}</small>${l.revisado ? '' : ' <span class="badge warn">conferir</span>'}</td></tr>`).join('')}
+        <td class="t">${esc(l.data || '—')}${l.folha.manual && l.folha.manual.hora ? `<br><small>${esc(l.folha.manual.hora)}</small>` : ''}</td>
+        <td>${l.folha.manual ? `<span class="badge ok" title="Entrega manual, assinada na tela">${IC('check')} manual</span>${l.nome ? ` <small>${esc(l.nome)}</small>` : ''}${l.folha.pendente ? ' <span class="badge">aguardando envio</span>' : ''}` : `<small>${esc(l.folha.titulo || l.folha.id)} · linha ${l.n}</small>`}${l.revisado ? '' : ' <span class="badge warn">conferir</span>'}</td></tr>`).join('')}
       </tbody></table></div>${filtrados.length > 1000 ? '<p class="muted">Mostrando os primeiros 1000. Refine a busca.</p>' : ''}`;
     $('#rbRegs').querySelectorAll('[data-folha]').forEach(tr => tr.addEventListener('click', () => { location.hash = 'receb/' + tr.dataset.folha; }));
     // clicar no SELB ou no local filtra por ele (em vez de abrir a folha)
@@ -1050,11 +1054,14 @@ async function salvarExistente(F) {
 
 async function abrirFolha(id, linha = 0) {
   const el = $('#mod-receb');
+  // entrega manual feita sem conexão (ainda na fila do aparelho)
+  if (String(id).startsWith('pendente-')) { const f = (RB.folhas || []).find(x => x.id === id); if (f) return verEntregaManual(f); }
   el.innerHTML = '<div class="panel">Carregando...</div>';
   if (!(await needServer(el))) return;
   const r = await api('api/recebimentos/' + encodeURIComponent(id)).catch(() => null);
   if (!r || !r.ok) { el.innerHTML = '<div class="panel"><p>Folha não encontrada.</p><a class="btn small ghost" href="#receb">Voltar</a></div>'; return; }
   const F = await r.json();
+  if (F.manual) return verEntregaManual(F);
   RB.cur = F; RB.dirty = false;
   const anx = await api(`api/recebimentos/${F.id}/anexos`).then(x => x.ok ? x.json() : []).catch(() => []);
   const url = a => `api/recebimentos/${F.id}/anexos/${a.aid}${srv.token ? '?token=' + encodeURIComponent(srv.token) : ''}`;

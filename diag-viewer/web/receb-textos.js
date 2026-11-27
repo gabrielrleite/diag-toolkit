@@ -19,6 +19,9 @@ const TEXTOS_RECEB = [
   ['Entregas', [
     ['entregas.folhas', 'Título: lista de folhas', 'Folhas de recebimento'],
     ['entregas.importar', 'Botão de importar', 'Importar folhas (OCR)'],
+    ['entregas.manual', 'Botão de entrega manual', 'Nova entrega manual'],
+    ['manual.titulo', 'Título: entrega manual', 'Entrega manual'],
+    ['manual.ajuda', 'Texto de ajuda (entrega manual)', 'Registre a entrega na hora: escolha o local e o SELB, marque os itens e peça para quem recebeu **assinar na tela**. Funciona também sem conexão: a entrega fica guardada e é enviada quando o servidor responder.'],
     ['entregas.lista', 'Título: lista de entregas', 'Recebimentos'],
   ]],
   ['Locais', [
@@ -72,6 +75,7 @@ async function renderTextosReceb() {
   if (!(await needServer(el))) return;
   await carregarTextosReceb(true);
   el.innerHTML = abasReceb('textos') + `
+    <div class="panel" id="ecPainel"><p class="muted">Carregando os campos da entrega manual…</p></div>
     <div class="panel">
       <div class="head-row"><h2>Textos da aba Recebimentos</h2><div class="filters" style="margin:0">
         <button class="btn ghost" id="txPadrao">Restaurar todos</button><button class="btn" id="txSalvar">Salvar textos</button></div></div>
@@ -87,6 +91,7 @@ async function renderTextosReceb() {
         }).join('')}</fieldset>`).join('')}
       <div class="dlg-actions"><button class="btn" id="txSalvar2">Salvar textos</button></div>
     </div>`;
+  painelCamposEntrega($('#ecPainel'));
   ligarRecolhiveis(el);
   el.querySelectorAll('.tx-campo').forEach(c => {
     const inp = c.querySelector('input, textarea'), pre = c.querySelector('.tx-pre span');
