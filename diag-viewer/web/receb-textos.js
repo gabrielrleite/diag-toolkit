@@ -72,7 +72,7 @@ function aplicarTextosMenu() {
 async function renderTextosReceb() {
   const el = $('#mod-receb');
   el.innerHTML = abasReceb('textos') + '<div class="panel">Carregando...</div>';
-  if (!(await needServer(el))) return;
+  if (!(await needServer(el, { offline: true }))) return;
   await carregarTextosReceb(true);
   el.innerHTML = abasReceb('textos') + `
     <div class="panel" id="ecPainel"><p class="muted">Carregando os campos da entrega manual…</p></div>

@@ -88,16 +88,19 @@ async function needServer(el, opc = {}) {
     el.innerHTML = '<div class="panel"><h2>Requer o servidor</h2><p>Este módulo guarda os dados no servidor. Abra a interface pelo endereço do servidor (ex.: http://IP-DO-SERVIDOR).</p></div>';
     return false;
   }
-  const r = await api('api/laudos').catch(() => null);
-  // impressoras/SELBs/suprimentos funcionam offline com a cópia guardada
-  if ((!r || r.status >= 502) && opc.offline && typeof offTemDados === 'function' && await offTemDados()) return true;
+  // sem servidor, não espera o tempo todo da rede (no 4G/5G o IP da rede local não responde nada)
+  const sabidoOffline = typeof OFF !== 'undefined' && !OFF.online;
+  const r = await api('api/laudos', { signal: AbortSignal.timeout(sabidoOffline ? 3000 : 10000) }).catch(() => null);
+  // Recebimentos (entregas, locais, SELBs, impressoras, suprimentos) funcionam offline com a cópia guardada
+  if ((!r || r.status >= 502) && opc.offline && typeof offTemDados === 'function') {
+    if (await offTemDados()) return true;
+    el.innerHTML = `<div class="panel"><h2>Sem conexão com o servidor</h2><p>Ainda não há cópia dos dados neste aparelho. Abra a Central uma vez com conexão (na rede do servidor${srv.token ? '' : ', com o token de leitura'}); a cópia é feita sozinha e depois esta tela funciona offline.</p></div>`;
+    return false;
+  }
   if (!r) { el.innerHTML = '<div class="panel"><p class="err">Servidor indisponível.</p></div>'; return false; }
   if (r.status === 401) {
-    el.innerHTML = `<div class="panel"><h2>Token de leitura</h2><p>Este servidor exige o token de leitura.</p>
-      <div class="filters"><input id="mtok" type="password" placeholder="token de leitura" style="min-width:280px"><button class="btn small" id="mtokOk">Entrar</button></div></div>`;
-    const go = () => { srv.token = $('#mtok').value.trim(); try { sessionStorage.setItem('diagReadToken', srv.token); } catch {} route(); };
-    $('#mtokOk').addEventListener('click', go);
-    $('#mtok').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    el.innerHTML = `<div class="panel"><h2>Token de leitura</h2><p>Este servidor exige o token de leitura.</p>${campoTokenHtml('mtok', !!srv.token)}</div>`;
+    ligarCampoToken('mtok', route);
     return false;
   }
   LD.list = r.ok ? await r.json() : [];

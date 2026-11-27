@@ -139,7 +139,7 @@ async function corrigirLote(campo, de, para, selb = '') {
 async function renderLocais(editarId) {
   const el = $('#mod-receb');
   el.innerHTML = abasReceb('locais') + '<div class="panel">Carregando...</div>';
-  if (!(await needServer(el))) return;
+  if (!(await needServer(el, { offline: true }))) return;
   const [regs] = await Promise.all([carregarEntregas(), carregarLocais(), carregarSelbsCad()]);
   // locais usados nas entregas, agrupados sem diferenciar acento/maiúscula
   const usados = new Map();
