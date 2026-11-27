@@ -459,7 +459,7 @@ function sanitizeFolha(b) {
   return F;
 }
 const resumoFolha = f => ({
-  id: f.id, titulo: f.titulo, dataFolha: f.dataFolha, criadoEm: f.criadoEm, atualizadoEm: f.atualizadoEm, revisao: f.revisao,
+  id: f.id, titulo: f.titulo, dataFolha: f.dataFolha, criadoEm: f.criadoEm, atualizadoEm: f.atualizadoEm, revisao: f.revisao, manual: !!f.manual,
   total: f.linhas.length, pendentes: f.linhas.filter(l => !l.revisado).length,
 });
 async function listFolhas(completo) {
@@ -713,6 +713,118 @@ async function unificarLocais(req, res, ip) {
   });
   await audit({ acao: 'locais_unificados', principal: out.principal.nome, sublocais: subs, ip });
   return json(res, 200, out);
+}
+
+// ------------------------------------------------------------------ entregas manuais (assinadas no celular)
+// Uma entrega manual vira uma "folha" de uma linha (local, SELB, data, itens, quem recebeu) com manual: {...}:
+// campos personalizados, assinatura desenhada na tela (PNG) e fotos opcionais (anexos da folha).
+const CAMPOS_FILE = path.join(RDIR, 'entrega-campos.json');
+const TIPOS_CAMPO_ENTREGA = ['texto', 'texto_longo', 'numero', 'data', 'lista', 'sim_nao'];
+const CAMPOS_PADRAO = {
+  recebedor: { ativo: true, obrigatorio: true, rotulo: 'Nome de quem recebeu' },
+  documento: { ativo: false, obrigatorio: false, rotulo: 'CPF / matrícula' },
+  assinatura: { obrigatoria: true },
+  fotos: { ativo: true, max: 4 },
+  termo: 'Declaro que recebi os itens acima em perfeito estado.',
+  campos: [],
+};
+async function lerCamposEntrega() {
+  let c = {};
+  try { c = JSON.parse(await fsp.readFile(CAMPOS_FILE, 'utf8')); } catch { /* padrão */ }
+  return { ...CAMPOS_PADRAO, ...c, recebedor: { ...CAMPOS_PADRAO.recebedor, ...(c.recebedor || {}) }, documento: { ...CAMPOS_PADRAO.documento, ...(c.documento || {}) },
+    assinatura: { ...CAMPOS_PADRAO.assinatura, ...(c.assinatura || {}) }, fotos: { ...CAMPOS_PADRAO.fotos, ...(c.fotos || {}) } };
+}
+function sanitizeCamposEntrega(b) {
+  const lim = (v, n) => txt(v, n).replace(/[\r\n\t]+/g, ' ').trim();
+  const fixo = (o, pad) => ({ ativo: o ? !!o.ativo : pad.ativo, obrigatorio: o ? !!o.obrigatorio && !!o.ativo : pad.obrigatorio, rotulo: lim(o && o.rotulo, 60) || pad.rotulo });
+  const ids = new Set();
+  return {
+    recebedor: fixo(b.recebedor, CAMPOS_PADRAO.recebedor), documento: fixo(b.documento, CAMPOS_PADRAO.documento),
+    assinatura: { obrigatoria: !!(b.assinatura && b.assinatura.obrigatoria) },
+    fotos: { ativo: !!(b.fotos && b.fotos.ativo), max: Math.max(1, Math.min(10, parseInt(b.fotos && b.fotos.max, 10) || 4)) },
+    termo: txt(b.termo, 500).trim(),
+    campos: (Array.isArray(b.campos) ? b.campos : []).slice(0, 30).map(c => {
+      let id = c && typeof c.id === 'string' && /^[a-z0-9]{6,12}$/.test(c.id) ? c.id : crypto.randomBytes(4).toString('hex');
+      if (ids.has(id)) id = crypto.randomBytes(4).toString('hex');
+      ids.add(id);
+      return { id, rotulo: lim(c && c.rotulo, 60), tipo: TIPOS_CAMPO_ENTREGA.includes(c && c.tipo) ? c.tipo : 'texto', obrigatorio: !!(c && c.obrigatorio), ativo: c ? c.ativo !== false : true,
+        opcoes: (Array.isArray(c && c.opcoes) ? c.opcoes : []).map(o => lim(o, 60)).filter(Boolean).slice(0, 30) };
+    }).filter(c => c.rotulo),
+  };
+}
+async function camposEntregaRoute(req, res, url) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  if (req.method === 'GET') return json(res, 200, await lerCamposEntrega());
+  if (req.method !== 'PUT') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+  let b; try { b = await readJsonBody(req, 50000); } catch { return json(res, 400, { erro: 'Dados inválidos.' }); }
+  const c = sanitizeCamposEntrega(b || {});
+  await writeJsonAtomic(CAMPOS_FILE, c);
+  await audit({ acao: 'entrega_campos', campos: c.campos.map(x => x.rotulo), ip: ipOf(req) });
+  return json(res, 200, c);
+}
+// grava uma imagem (data URL) como anexo da folha
+async function salvarImagemAnexo(o, dataUrl, nome, legenda, ip) {
+  const m = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
+  if (!m) return null;
+  const buf = Buffer.from(m[2], 'base64');
+  if (!buf.length || buf.length > ANX_MAX) return null;
+  await fsp.mkdir(o.dir, { recursive: true });
+  const aid = crypto.randomBytes(6).toString('hex'), ext = ANX_TYPES[m[1]];
+  await fsp.writeFile(path.join(o.dir, aid + ext), buf);
+  const meta = { aid, nome: nome + ext, legenda, tipo: m[1], tamanho: buf.length, sha256: crypto.createHash('sha256').update(buf).digest('hex').toUpperCase(),
+    modificado: '', capturada: '', enviadoEm: new Date().toISOString(), ip };
+  await withLock(o.chave, async () => { const l = await readAnx(o); l.push(meta); await writeAnx(o, l); });
+  return meta;
+}
+async function entregaManualRoute(req, res, url) {
+  if (!canRead(req, url)) { req.resume(); return json(res, 401, { erro: 'Token de leitura necessário.' }); }
+  if (req.method !== 'POST') { req.resume(); return json(res, 405, { erro: 'Método não permitido.' }); }
+  let b; try { b = await readJsonBody(req, 12 * ANX_MAX); } catch { return json(res, 413, { erro: 'Entrega grande demais (fotos). Use menos fotos.' }); }
+  const ip = ipOf(req), cfg = await lerCamposEntrega();
+  const lim = (v, n) => txt(v, n).replace(/[\r\n\t]+/g, ' ').trim();
+  // reenvio da fila offline: a mesma entrega (idCliente) não é gravada duas vezes
+  const idCliente = /^[A-Za-z0-9-]{8,64}$/.test(b.idCliente || '') ? b.idCliente : '';
+  if (idCliente) for (const f of await listFolhas(false)) if (f.manual) {
+    const full = JSON.parse(await fsp.readFile(path.join(RDIR, f.id + '.json'), 'utf8').catch(() => 'null'));
+    if (full && full.manual && full.manual.idCliente === idCliente) return json(res, 200, full);
+  }
+  const local = lim(b.local, 160), selb = RecebOCR.juntarSelbs(RecebOCR.separarSelbs(lim(b.selb, 300)).map(x => x.toUpperCase().slice(0, 40)).slice(0, 30));
+  const dataIso = /^\d{4}-\d{2}-\d{2}$/.test(b.dataIso || '') ? b.dataIso : new Date().toISOString().slice(0, 10);
+  const recebedor = lim(b.recebedor, 160), documento = lim(b.documento, 40);
+  const erros = [];
+  if (!local) erros.push('local');
+  if (!selb) erros.push('SELB');
+  if (cfg.recebedor.ativo && cfg.recebedor.obrigatorio && !recebedor) erros.push(cfg.recebedor.rotulo);
+  if (cfg.documento.ativo && cfg.documento.obrigatorio && !documento) erros.push(cfg.documento.rotulo);
+  if (cfg.assinatura.obrigatoria && !/^data:image\/png;base64,/.test(b.assinatura || '')) erros.push('assinatura');
+  const campos = {};
+  for (const c of cfg.campos.filter(x => x.ativo)) {
+    let v = b.campos && b.campos[c.id];
+    v = c.tipo === 'sim_nao' ? (v === true || v === 'sim' ? 'sim' : v === false || v === 'nao' ? 'não' : '') : txt(v, c.tipo === 'texto_longo' ? 2000 : 300).trim();
+    if (c.tipo === 'lista' && v && c.opcoes.length && !c.opcoes.includes(v)) v = '';
+    if (c.obrigatorio && !v) erros.push(c.rotulo);
+    if (v) campos[c.id] = { rotulo: c.rotulo, valor: v };
+  }
+  if (erros.length) return json(res, 400, { erro: 'Preencha: ' + erros.join(', ') + '.' });
+  const agora = new Date();
+  const nid = agora.toISOString().slice(0, 10).replace(/-/g, '') + '-' + crypto.randomBytes(3).toString('hex');
+  const [a, m, d] = dataIso.split('-');
+  const linha = sanitizeFolha({ linhas: [{ n: 1, revisado: true, escrita: true, local, selb, data: `${d}/${m}/${a}`, dataIso, nome: recebedor, cpf: documento, itens: b.itens }] }).linhas[0];
+  const f = {
+    id: nid, revisao: 1, criadoEm: agora.toISOString(), atualizadoEm: agora.toISOString(), criadoPorIp: ip,
+    titulo: `Entrega manual · ${local}`, obs: txt(b.obs, 2000), dataFolha: dataIso, linhas: [linha], grade: null,
+    manual: { idCliente, recebedor, documento, campos, termo: cfg.termo, feitaEm: /^\d{4}-\d{2}-\d{2}T/.test(b.feitaEm || '') ? b.feitaEm.slice(0, 30) : agora.toISOString(), assinatura: '', fotos: [] },
+  };
+  await writeJsonAtomic(path.join(RDIR, nid + '.json'), f);
+  const o = owner('receb', nid);
+  if (b.assinatura) { const s = await salvarImagemAnexo(o, b.assinatura, 'assinatura', 'Assinatura de quem recebeu', ip); if (s) f.manual.assinatura = s.aid; }
+  for (const [i, ft] of (Array.isArray(b.fotos) ? b.fotos : []).slice(0, cfg.fotos.ativo ? cfg.fotos.max : 0).entries()) {
+    const s = await salvarImagemAnexo(o, ft && ft.dataUrl, `foto-${i + 1}`, lim(ft && ft.legenda, 300) || `Foto da entrega ${i + 1}`, ip);
+    if (s) f.manual.fotos.push(s.aid);
+  }
+  await writeJsonAtomic(path.join(RDIR, nid + '.json'), f);
+  await audit({ acao: 'entrega_manual', folha: nid, local, selb, itens: linha.itens.length, fotos: f.manual.fotos.length, assinada: !!f.manual.assinatura, ip });
+  return json(res, 201, f);
 }
 
 // troca (ou apaga, com para = '') um valor de local/SELB em todas as folhas.
@@ -2016,6 +2128,8 @@ const server = http.createServer(async (req, res) => {
     const ra = p.match(/^\/api\/recebimentos\/([^/]+)\/anexos(?:\/([^/]+))?$/);
     if (ra) return await anexoRoute(req, res, url, owner('receb', ra[1]), ra[2]);
     if (p === '/api/recebimentos/lote') return await loteRoute(req, res, url);
+    if (p === '/api/recebimentos/manual') return await entregaManualRoute(req, res, url);
+    if (p === '/api/receb-entrega-campos') return await camposEntregaRoute(req, res, url);
     const oc = p.match(/^\/api\/ocr(?:\/(saude))?$/);
     if (oc) return await ocrRoute(req, res, url, oc[1]);
     const tr = p.match(/^\/api\/treino(?:\/(config|exemplos|esquecer|exportar\.zip))?$/);
