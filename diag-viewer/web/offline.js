@@ -9,7 +9,10 @@ const OFF = { online: true, desde: null, fila: [], mem: new Map(), dbp: null, si
 // leituras guardadas para uso offline (caminho sem a barra inicial)
 const OFF_GET = [/^api\/monitor(\?|$)/, /^api\/monitor\/(quedas|alertas|historico)(\?|$)/, /^api\/suprimentos(\?|$)/,
   /^api\/suprimentos\/(codigos|historico|cadastro)(\?|$)/, /^api\/receb-selbs$/, /^api\/receb-locais(\/categorias)?$/,
-  /^api\/receb-textos$/, /^api\/recebimentos\?linhas=1$/, /^api\/receb-entrega-campos$/];
+  /^api\/receb-textos$/, /^api\/recebimentos\?linhas=1$/, /^api\/receb-entrega-campos$/, /^api\/recebimentos\/\d{8}-[0-9a-f]{6}(\/anexos)?$/];
+// o que é baixado sozinho (com conexão) para a cópia existir mesmo nas telas ainda não abertas
+const OFF_PRE = ['api/receb-selbs', 'api/receb-locais', 'api/receb-locais/categorias', 'api/recebimentos?linhas=1', 'api/monitor', 'api/suprimentos',
+  'api/suprimentos/codigos', 'api/receb-textos', 'api/receb-entrega-campos', 'api/monitor/quedas?dias=30', 'api/monitor/alertas?dias=30'];
 // alterações que podem esperar na fila
 const OFF_FILA = [[/^api\/recebimentos\/manual$/, ['POST']], [/^api\/receb-selbs\/[^/?]+$/, ['PUT', 'DELETE']], [/^api\/suprimentos\/codigos$/, ['PUT']], [/^api\/monitor\/pausa(\?|$)/, ['POST', 'DELETE']]];
 
@@ -47,7 +50,23 @@ async function cacheEditar(p, fn) {
 async function filaCarregar() { OFF.fila = ((await offOp('fila', 'readonly', s => s.getAll())) || OFF.fila).sort((a, b) => a.id - b.id); return OFF.fila; }
 async function filaGravar(it) { OFF.fila = [...OFF.fila.filter(x => x.id !== it.id), it].sort((a, b) => a.id - b.id); await offOp('fila', 'readwrite', s => s.put(it)); }
 async function filaRemover(id) { OFF.fila = OFF.fila.filter(x => x.id !== id); await offOp('fila', 'readwrite', s => s.delete(id)); }
-const offTemDados = async () => !!(await cacheLer('api/receb-selbs') || await cacheLer('api/monitor'));
+const offTemDados = async () => { for (const k of OFF_PRE.slice(0, 5)) if (await cacheLer(k)) return true; return false; };
+// cópia de tudo de uma vez (no início, ao voltar a conexão e ao informar o token); no máximo a cada 5 min
+async function preCarregar(forcar = false) {
+  if (location.protocol === 'file:' || OFF.preCarregando || (!forcar && OFF.preEm && Date.now() - OFF.preEm < 300000)) return;
+  OFF.preCarregando = true;
+  try {
+    for (const p of OFF_PRE) {
+      const r = await apiOffline(p, { signal: AbortSignal.timeout(20000) }).catch(() => null);
+      if (!r || r.headers.get('X-Offline')) return; // sem servidor: tenta depois
+      if (r.status === 401) { OFF.precisaToken = true; desenharBarraOffline(); return; }
+    }
+    OFF.preEm = Date.now(); OFF.precisaToken = false;
+    try { localStorage.setItem('diagCopiaEm', new Date().toISOString()); } catch { /* sem storage */ }
+  } finally { OFF.preCarregando = false; }
+}
+// token informado (app.js): tenta de novo a fila e a cópia
+function offTokenSalvo() { OFF.precisaToken = false; desenharBarraOffline(); setTimeout(() => { sincronizarFila(); preCarregar(true); }, 300); }
 
 // ---------------------------------------------------------------- respostas
 const respJson = (obj, status = 200, extra = {}) => new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json', ...extra } });
@@ -61,6 +80,7 @@ function marcarOnline() {
   OFF.online = true; OFF.desde = null;
   desenharBarraOffline();
   if (voltou || OFF.fila.some(x => !x.erro)) sincronizarFila();
+  if (voltou) setTimeout(() => preCarregar(), 2000);
 }
 
 // api() da Central diag passa por aqui: rede normal; sem servidor, cópia guardada (leituras) ou fila (alterações)
@@ -177,20 +197,21 @@ async function aplicarLocal(it, p) {
 async function sincronizarFila() {
   if (OFF.sincronizando) return;
   OFF.sincronizando = true; desenharBarraOffline();
-  let enviados = 0, parou = false;
+  let enviados = 0, parou = false, semToken = false;
   try {
     for (const it of [...(await filaCarregar())]) {
       if (it.erro) continue;
       let r;
       try { r = await apiRede(it.path, { method: it.metodo, headers: it.body ? { 'Content-Type': 'application/json' } : {}, body: it.body || undefined, signal: AbortSignal.timeout(15000) }); } catch { parou = true; break; }
-      if (r.status >= 500 || r.status === 401) { parou = true; break; } // servidor fora ou sem token: tenta depois
+      if (r.status === 401) { OFF.precisaToken = true; semToken = true; break; } // servidor no ar, mas sem token: pede na barra
+      if (r.status >= 500) { parou = true; break; } // servidor fora: tenta depois
       if (r.ok) { await filaRemover(it.id); enviados++; continue; }
       const j = await r.json().catch(() => ({}));
       await filaGravar({ ...it, erro: j.erro || `recusado (HTTP ${r.status})` });
     }
   } finally {
     OFF.sincronizando = false;
-    if (parou) marcarOffline(); else { OFF.online = true; OFF.desde = null; }
+    if (parou) marcarOffline(); else { OFF.online = true; OFF.desde = null; if (!semToken) OFF.precisaToken = false; }
     OFF.enviados += enviados;
     desenharBarraOffline();
   }
@@ -211,11 +232,20 @@ function desenharBarraOffline() {
   let b = document.getElementById('offBarra');
   if (!b) { b = document.createElement('div'); b.id = 'offBarra'; b.className = 'off-barra'; b.setAttribute('role', 'status'); document.body.appendChild(b); }
   const pend = OFF.fila.filter(x => !x.erro), recus = OFF.fila.filter(x => x.erro);
-  if (OFF.online && !OFF.fila.length) { b.hidden = true; b.classList.remove('aberta'); document.body.classList.remove('com-offbarra'); return; }
+  if (OFF.online && !OFF.fila.length && !OFF.precisaToken) { b.hidden = true; b.classList.remove('aberta'); document.body.classList.remove('com-offbarra'); return; }
   b.hidden = false;
   document.body.classList.add('com-offbarra'); // a página ganha espaço embaixo: a barra não cobre botões
   const quando = iso => { const d = new Date(iso); return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
-  const titulo = !OFF.online ? '<b>Sem conexão com o servidor</b> — impressoras, SELBs e suprimentos com a última cópia salva'
+  if (OFF.online && OFF.precisaToken) {
+    // servidor no ar, mas o token de leitura não está neste aparelho (ou mudou): pede aqui mesmo
+    b.className = 'off-barra erro';
+    b.innerHTML = `<div class="off-cab"><span class="off-bola"></span><span><b>Informe o token de leitura</b>${pend.length ? ` para enviar ${pend.length} alteração(ões)` : ' para salvar a cópia offline'}</span></div>
+      <div class="off-token">${campoTokenHtml('offTok', !!srv.token)}</div>`;
+    ligarCampoToken('offTok', () => {});
+    return;
+  }
+  let copia = ''; try { copia = localStorage.getItem('diagCopiaEm') || ''; } catch { /* sem storage */ }
+  const titulo = !OFF.online ? `<b>Sem conexão com o servidor</b> — Recebimentos com a cópia salva neste aparelho${copia ? ` (${quando(copia)})` : ''}`
     : OFF.sincronizando ? `<b>Enviando ${pend.length} alteração(ões)…</b>` : pend.length ? `<b>${pend.length} alteração(ões) aguardando envio</b>` : `<b>${recus.length} alteração(ões) recusada(s) pelo servidor</b>`;
   b.className = `off-barra ${!OFF.online ? 'off' : recus.length && !pend.length ? 'erro' : 'sync'}${b.classList.contains('aberta') ? ' aberta' : ''}`;
   b.innerHTML = `<div class="off-cab"><span class="off-bola"></span><span>${titulo}${!OFF.online && pend.length ? ` · ${pend.length} alteração(ões) na fila` : ''}${recus.length && pend.length ? ` · ${recus.length} recusada(s)` : ''}</span>
@@ -243,6 +273,7 @@ function desenharBarraOffline() {
   await filaCarregar();
   desenharBarraOffline();
   if (OFF.fila.some(x => !x.erro)) { agendarTentativa(); setTimeout(() => sincronizarFila(), 1500); }
+  setTimeout(() => preCarregar(), 3000); // cópia local de tudo (Recebimentos)
   window.addEventListener('online', () => { setTimeout(() => sincronizarFila(), 1000); });
   window.addEventListener('offline', () => marcarOffline());
   // abrir a página sem servidor (só em HTTPS ou localhost: exigência dos navegadores para o service worker)

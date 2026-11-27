@@ -705,7 +705,24 @@ window.addEventListener('drop', e => {
 
 // ------------------------------------------------------------------ servidor
 const srv = { ok: false, info: null, list: [], q: '', token: '' };
-try { srv.token = sessionStorage.getItem('diagReadToken') || ''; } catch { /* sem storage */ }
+// token de leitura: na sessão e, se "lembrar neste aparelho", também no localStorage (o app instalado e o
+// modo offline continuam funcionando depois de fechar o navegador)
+try { srv.token = sessionStorage.getItem('diagReadToken') || localStorage.getItem('diagReadToken') || ''; } catch { /* sem storage */ }
+function salvarToken(t, lembrar = true) {
+  srv.token = String(t || '').trim();
+  try { sessionStorage.setItem('diagReadToken', srv.token); } catch { /* sem storage */ }
+  try { if (lembrar && srv.token) localStorage.setItem('diagReadToken', srv.token); else localStorage.removeItem('diagReadToken'); } catch { /* sem storage */ }
+  if (typeof offTokenSalvo === 'function') offTokenSalvo();
+}
+// campo do token com "lembrar neste aparelho" (marcado por padrão)
+const campoTokenHtml = (id, recusado) => `<div class="filters"><input id="${id}" type="password" placeholder="token de leitura" style="min-width:240px" autocomplete="current-password">
+  <label class="chk"><input type="checkbox" id="${id}Lembrar" checked> lembrar neste aparelho</label>
+  <button class="btn small" id="${id}Ok">Entrar</button>${recusado ? '<span class="badge bad">token recusado</span>' : ''}</div>`;
+function ligarCampoToken(id, depois) {
+  const go = () => { salvarToken($('#' + id).value, $('#' + id + 'Lembrar').checked); depois(); };
+  $('#' + id + 'Ok').addEventListener('click', go);
+  $('#' + id).addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+}
 
 async function apiRede(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
@@ -731,11 +748,8 @@ async function loadServerList() {
   if (r.status === 401) {
     box.innerHTML = `<h2>Coletas recebidas pelo servidor</h2>
       <p>Este servidor exige o token de leitura.</p>
-      <div class="filters"><input id="rtok" type="password" placeholder="token de leitura" style="min-width:280px"><button class="btn small" id="rtokOk">Entrar</button>
-      ${srv.token ? '<span class="badge bad">token recusado</span>' : ''}</div>`;
-    const go = () => { srv.token = $('#rtok').value.trim(); try { sessionStorage.setItem('diagReadToken', srv.token); } catch {} loadServerList(); };
-    $('#rtokOk').addEventListener('click', go);
-    $('#rtok').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+      ${campoTokenHtml('rtok', !!srv.token)}`;
+    ligarCampoToken('rtok', loadServerList);
     return;
   }
   srv.list = r.ok ? await r.json() : [];

@@ -1052,13 +1052,29 @@ async function salvarExistente(F) {
   const t = document.querySelector('#mod-receb .ld-bar small.mono'); if (t) t.textContent = `${F.id} · rev. ${F.revisao} · salvo`;
 }
 
+// folha/entrega aberta sem conexão: resumo das linhas guardadas (sem imagens nem edição)
+function resumoOffline(f, linha) {
+  const el = $('#mod-receb');
+  el.innerHTML = abasReceb('entregas') + `<div class="panel">
+    <div class="head-row"><div><a href="#receb" class="btn small ghost">← ${esc(Tp('aba.entregas'))}</a> <b class="ld-title">${esc(f.titulo || f.id)}</b></div>${f.manual ? '<span class="badge ok">manual</span>' : ''}</div>
+    <p class="muted">${IC('alerta')} Sem conexão com o servidor: mostrando o resumo salvo neste aparelho. ${f.manual ? 'Assinatura, fotos e campos aparecem' : 'A imagem da folha e a conferência ficam disponíveis'} quando a conexão voltar.</p>
+    <div class="tablewrap"><table><thead><tr><th class="nosort">Linha</th><th class="nosort">Local</th><th class="nosort">SELB</th><th class="nosort">Itens</th><th class="nosort">Data</th></tr></thead><tbody>
+    ${f.linhas.map(l => `<tr class="${l.n === linha ? 'rb-multi' : ''}"><td>${l.n}</td><td>${esc(l.local || '—')}</td><td>${esc(l.selb || '—')}</td><td>${itensHtml(l.itens)}</td>
+      <td class="t">${esc(l.data || '—')}${f.manual && f.manual.hora ? ` ${esc(f.manual.hora)}` : ''}${l.nome && f.manual ? `<br><small>${esc(l.nome)}</small>` : ''}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
 async function abrirFolha(id, linha = 0) {
   const el = $('#mod-receb');
   // entrega manual feita sem conexão (ainda na fila do aparelho)
   if (String(id).startsWith('pendente-')) { const f = (RB.folhas || []).find(x => x.id === id); if (f) return verEntregaManual(f); }
   el.innerHTML = '<div class="panel">Carregando...</div>';
-  if (!(await needServer(el))) return;
+  if (!(await needServer(el, { offline: true }))) return;
   const r = await api('api/recebimentos/' + encodeURIComponent(id)).catch(() => null);
+  // sem conexão e sem cópia desta folha: mostra o que a lista de entregas guardou (sem imagens)
+  if ((!r || r.headers.get('X-Offline')) && !(r && r.ok)) {
+    if (!RB.folhas || !RB.folhas.length) { const c = await api('api/recebimentos?linhas=1').catch(() => null); RB.folhas = c && c.ok ? await c.json() : []; }
+    const f = RB.folhas.find(x => x.id === id);
+    if (f) return resumoOffline(f, linha);
+  }
   if (!r || !r.ok) { el.innerHTML = '<div class="panel"><p>Folha não encontrada.</p><a class="btn small ghost" href="#receb">Voltar</a></div>'; return; }
   const F = await r.json();
   if (F.manual) return verEntregaManual(F);
