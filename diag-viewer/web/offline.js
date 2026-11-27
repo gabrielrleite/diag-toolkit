@@ -160,7 +160,7 @@ async function aplicarLocal(it, p) {
     const [a, m, d] = String(corpo.dataIso || '').split('-');
     const cfg = (typeof EM !== 'undefined' && EM.cfg) || { campos: [] };
     const campos = Object.fromEntries(Object.entries(corpo.campos || {}).filter(([, v]) => v).map(([k, v]) => [k, { rotulo: (cfg.campos.find(c => c.id === k) || {}).rotulo || k, valor: v === 'nao' ? 'não' : v }]));
-    lista.unshift({ id, titulo: `Entrega manual · ${corpo.local}`, dataFolha: corpo.dataIso, criadoEm: it.quando, atualizadoEm: it.quando, revisao: 0, manual: { recebedor: corpo.recebedor, documento: corpo.documento, campos, termo: cfg.termo, feitaEm: corpo.feitaEm, fotos: [] }, pendente: true,
+    lista.unshift({ id, titulo: `Entrega manual · ${corpo.local}`, dataFolha: corpo.dataIso, criadoEm: it.quando, atualizadoEm: it.quando, revisao: 0, manual: { recebedor: corpo.recebedor, documento: corpo.documento, hora: corpo.hora, campos, termo: cfg.termo, feitaEm: corpo.feitaEm, fotos: [] }, pendente: true,
       total: 1, pendentes: 0, obs: corpo.obs, linhas: [{ n: 1, revisado: true, local: corpo.local, selb: corpo.selb, data: d ? `${d}/${m}/${a}` : '', dataIso: corpo.dataIso, nome: corpo.recebedor, itens: corpo.itens || [] }] });
     return lista;
   });

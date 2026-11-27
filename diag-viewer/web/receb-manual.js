@@ -16,6 +16,7 @@ async function carregarCamposEntrega() {
   EM.cfg = r && r.ok ? await r.json() : EM.cfg || CAMPOS_ENTREGA_PADRAO;
   return EM.cfg;
 }
+const horaAgora = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 const hojeIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const idCliente = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 12));
 
@@ -101,7 +102,9 @@ async function renderEntregaManual() {
       <div class="em-grade">
         <label class="em-campo"><span>Local <span class="em-obr">*</span></span><input id="emLocal" list="emDlLocal" autocomplete="off" maxlength="160" placeholder="onde foi entregue"></label>
         <label class="em-campo"><span>SELB <span class="em-obr">*</span></span><input id="emSelb" list="emDlSelb" autocomplete="off" maxlength="300" placeholder="vários: A123, A124" autocapitalize="characters"></label>
-        <label class="em-campo">Data <input id="emData" type="date" value="${hojeIso()}"></label>
+        <div class="em-campo em-quando"><span>Data e hora da entrega</span>
+          <div class="em-quando-linha"><input id="emData" type="date" value="${hojeIso()}" aria-label="Data"><input id="emHora" type="time" value="${horaAgora()}" aria-label="Hora"></div>
+          <button type="button" class="linklike" id="emAgora">${IC('relogio')}Usar horário atual</button></div>
         <datalist id="emDlLocal">${locais.map(v => `<option value="${esc(v)}">`).join('')}</datalist>
         <datalist id="emDlSelb">${selbs.map(v => `<option value="${esc(v)}">`).join('')}</datalist>
       </div>
@@ -125,6 +128,8 @@ async function renderEntregaManual() {
       </div>
       <div class="dlg-actions"><a class="btn ghost" href="#receb">Cancelar</a><button class="btn" id="emSalvar">${IC('check')}Registrar entrega</button></div>
     </div>`;
+  // data e hora: já vêm com o momento em que o formulário abriu; o botão atualiza para agora
+  $('#emAgora').onclick = () => { $('#emData').value = hojeIso(); $('#emHora').value = horaAgora(); ['#emData', '#emHora'].forEach(q => { $(q).classList.remove('sf-preenchido'); void $(q).offsetWidth; $(q).classList.add('sf-preenchido'); }); };
   const pad = padAssinatura($('#emPad'));
   $('#emPad').addEventListener('mudou', () => $('#emForm .em-pad-caixa').classList.toggle('assinado', !pad.vazio()));
   $('#emLimpar').onclick = () => pad.limpar();
@@ -187,7 +192,7 @@ async function renderEntregaManual() {
       else campos[c.id] = val('#emc-' + c.id);
     }
     const corpo = {
-      idCliente: E.id, feitaEm: new Date().toISOString(), local: val('#emLocal'), selb: normSelbs(val('#emSelb')), dataIso: val('#emData') || hojeIso(),
+      idCliente: E.id, feitaEm: new Date().toISOString(), local: val('#emLocal'), selb: normSelbs(val('#emSelb')), dataIso: val('#emData') || hojeIso(), hora: val('#emHora'),
       itens: E.itens, recebedor: val('#emRecebedor'), documento: val('#emDocumento'), obs: val('#emObs'), campos,
       assinatura: pad.png(), fotos: E.fotos,
     };
@@ -244,7 +249,7 @@ async function verEntregaManual(F) {
       <dl class="em-dados">
         <dt>Local</dt><dd>${esc(l.local || '—')}${pr ? ` <small class="muted">(${esc(pr.nome)})</small>` : ''}</dd>
         <dt>SELB</dt><dd>${esc(l.selb || '—')}</dd>
-        <dt>Data</dt><dd>${esc(l.data || '—')} <small class="muted">registrada em ${esc(quando)}</small></dd>
+        <dt>Data</dt><dd>${esc(l.data || '—')}${M.hora ? ` às ${esc(M.hora)}` : ''} <small class="muted">registrada em ${esc(quando)}</small></dd>
         <dt>Itens</dt><dd>${(l.itens || []).length ? `<ul class="em-itens-lista">${l.itens.map(it => `<li><span class="it-bola it-${it.item}">${it.item === 'caixa' ? IC('caixa') : ''}</span>${esc(it.item === 'caixa' ? ITENS.caixa : nomeSuprimento(it.item, it.tipo))} <b>× ${it.qtd}</b>${selbsDe(l.selb).length > 1 ? ` <small class="muted">${esc(it.selb)}</small>` : ''}</li>`).join('')}</ul>` : '<span class="muted">nenhum item marcado</span>'}</dd>
         ${M.recebedor ? `<dt>Recebido por</dt><dd>${esc(M.recebedor)}</dd>` : ''}
         ${M.documento ? `<dt>Documento</dt><dd>${esc(M.documento)}</dd>` : ''}

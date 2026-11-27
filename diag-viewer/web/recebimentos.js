@@ -145,7 +145,7 @@ async function renderReceb(arg) {
         <td>${l.local ? `<button class="linklike" data-filtro="local" data-v="${esc(l.local)}" title="${esc((localCadastrado(l.local) ? enderecoTxt(localCadastrado(l.local)) + ' — ' : '') + 'clique para filtrar por este local')}">${esc(l.local)}</button>${principalDoLocal(l.local) ? `<br><button class="linklike sub-principal" data-filtro="local" data-v="${esc(principalDoLocal(l.local).nome)}" title="Local principal: filtrar por ele e todas as salas">${IC('local')}${esc(principalDoLocal(l.local).nome)}</button>` : ''}` : '—'}</td>
         <td>${selbsDe(l.selb).map(x => `<button class="linklike" data-filtro="selb" data-v="${esc(x)}" title="Filtrar por este SELB">${esc(x)}</button>`).join(', ') || '—'}</td>
         <td>${itensHtml(l.itens)}</td>
-        <td class="t">${esc(l.data || '—')}</td>
+        <td class="t">${esc(l.data || '—')}${l.folha.manual && l.folha.manual.hora ? `<br><small>${esc(l.folha.manual.hora)}</small>` : ''}</td>
         <td>${l.folha.manual ? `<span class="badge ok" title="Entrega manual, assinada na tela">${IC('check')} manual</span>${l.nome ? ` <small>${esc(l.nome)}</small>` : ''}${l.folha.pendente ? ' <span class="badge">aguardando envio</span>' : ''}` : `<small>${esc(l.folha.titulo || l.folha.id)} · linha ${l.n}</small>`}${l.revisado ? '' : ' <span class="badge warn">conferir</span>'}</td></tr>`).join('')}
       </tbody></table></div>${filtrados.length > 1000 ? '<p class="muted">Mostrando os primeiros 1000. Refine a busca.</p>' : ''}`;
     $('#rbRegs').querySelectorAll('[data-folha]').forEach(tr => tr.addEventListener('click', () => { location.hash = 'receb/' + tr.dataset.folha; }));

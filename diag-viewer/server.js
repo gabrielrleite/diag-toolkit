@@ -459,7 +459,7 @@ function sanitizeFolha(b) {
   return F;
 }
 const resumoFolha = f => ({
-  id: f.id, titulo: f.titulo, dataFolha: f.dataFolha, criadoEm: f.criadoEm, atualizadoEm: f.atualizadoEm, revisao: f.revisao, manual: !!f.manual,
+  id: f.id, titulo: f.titulo, dataFolha: f.dataFolha, criadoEm: f.criadoEm, atualizadoEm: f.atualizadoEm, revisao: f.revisao, manual: f.manual ? { hora: f.manual.hora || '' } : false,
   total: f.linhas.length, pendentes: f.linhas.filter(l => !l.revisado).length,
 });
 async function listFolhas(completo) {
@@ -791,6 +791,7 @@ async function entregaManualRoute(req, res, url) {
   const local = lim(b.local, 160), selb = RecebOCR.juntarSelbs(RecebOCR.separarSelbs(lim(b.selb, 300)).map(x => x.toUpperCase().slice(0, 40)).slice(0, 30));
   const dataIso = /^\d{4}-\d{2}-\d{2}$/.test(b.dataIso || '') ? b.dataIso : new Date().toISOString().slice(0, 10);
   const recebedor = lim(b.recebedor, 160), documento = lim(b.documento, 40);
+  const hora = /^([01]\d|2[0-3]):[0-5]\d$/.test(b.hora || '') ? b.hora : '';
   const erros = [];
   if (!local) erros.push('local');
   if (!selb) erros.push('SELB');
@@ -813,7 +814,7 @@ async function entregaManualRoute(req, res, url) {
   const f = {
     id: nid, revisao: 1, criadoEm: agora.toISOString(), atualizadoEm: agora.toISOString(), criadoPorIp: ip,
     titulo: `Entrega manual · ${local}`, obs: txt(b.obs, 2000), dataFolha: dataIso, linhas: [linha], grade: null,
-    manual: { idCliente, recebedor, documento, campos, termo: cfg.termo, feitaEm: /^\d{4}-\d{2}-\d{2}T/.test(b.feitaEm || '') ? b.feitaEm.slice(0, 30) : agora.toISOString(), assinatura: '', fotos: [] },
+    manual: { idCliente, recebedor, documento, hora, campos, termo: cfg.termo, feitaEm: /^\d{4}-\d{2}-\d{2}T/.test(b.feitaEm || '') ? b.feitaEm.slice(0, 30) : agora.toISOString(), assinatura: '', fotos: [] },
   };
   await writeJsonAtomic(path.join(RDIR, nid + '.json'), f);
   const o = owner('receb', nid);
