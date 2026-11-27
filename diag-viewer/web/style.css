@@ -909,3 +909,22 @@ label:has(> .sf-aviso:not([hidden])) > input { border-color: var(--bad); }
 .off-lista .off-motivo { color: var(--bad) !important; font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { .off-barra.sync .off-bola { animation: none; } }
 @media print { .off-barra { display: none !important; } }
+
+/* instalar como app */
+.instalar-btn { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--side-muted); border-color: rgba(255, 255, 255, .12); font-size: 12.5px; padding: 6px 10px; }
+.instalar-btn:hover { color: #fff; }
+.instalar-btn .ic { width: 15px; height: 15px; }
+@media (max-width: 900px) { .instalar-btn span { display: none; } .instalar-btn { margin-left: 6px; padding: 7px; } }
+.inst-aviso { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; margin: 0 0 14px; border-radius: 12px;
+  background: var(--accent-soft); border: 1px solid var(--line); }
+.inst-aviso img { border-radius: 10px; flex: none; }
+.inst-aviso > div:nth-child(2) { flex: 1; min-width: 180px; }
+.inst-aviso small { color: var(--ink-2); }
+.inst-acoes { display: flex; gap: 8px; }
+.inst-passos { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.inst-end { display: flex; gap: 8px; margin-top: 4px; }
+.inst-end input { flex: 1; min-width: 0; font-family: var(--mono, monospace); font-size: 13px; }
+.inst-alerta { padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--ink); font-size: 13px; line-height: 1.5; }
+.inst-alerta code { background: var(--panel); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
+/* aberto como app (tela cheia): respeita a área do relógio/notch */
+@media (display-mode: standalone) { .side { padding-top: max(8px, env(safe-area-inset-top)); } .off-barra { bottom: max(16px, env(safe-area-inset-bottom)); } }

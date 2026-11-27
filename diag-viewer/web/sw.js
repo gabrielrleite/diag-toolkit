@@ -2,9 +2,10 @@
 // Service worker da Central diag: guarda a interface (HTML, CSS, JS, ícones) para abrir a página sem o servidor.
 // Só funciona em HTTPS ou localhost (exigência dos navegadores). Os dados (api/) não passam por aqui: o
 // offline.js guarda a cópia e a fila de alterações.
-const CACHE = 'central-diag-v1';
-const BASE = ['./', 'index.html', 'style.css', 'report.css', 'icones.svg', 'tema.js', 'app.js', 'offline.js', 'saude.js', 'receb-ocr.js',
-  'receb-textos.js', 'recebimentos.js', 'receb-cadastro.js', 'monitor.js', 'laudos.js', 'assinatura.js'];
+const CACHE = 'central-diag-v2';
+const BASE = ['./', 'index.html', 'style.css', 'report.css', 'icones.svg', 'tema.js', 'app.js', 'offline.js', 'instalar.js', 'saude.js', 'receb-ocr.js',
+  'receb-textos.js', 'recebimentos.js', 'receb-cadastro.js', 'monitor.js', 'laudos.js', 'assinatura.js',
+  'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-180.png', 'icons/favicon-32.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(BASE)).then(() => self.skipWaiting()));
