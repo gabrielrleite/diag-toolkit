@@ -888,3 +888,43 @@ label:has(> .sf-aviso:not([hidden])) > input { border-color: var(--bad); }
 .cod-tab .cod-in::placeholder { color: var(--muted); opacity: .85; }
 .cod-orig { display: block; font-size: 10.5px; color: var(--muted); margin-top: 2px; }
 .cod-tab th .it-bola { width: 10px; height: 10px; vertical-align: middle; }
+
+/* modo offline: barra de situação (sem servidor / alterações na fila) */
+.off-barra { position: fixed; right: 16px; bottom: 16px; z-index: 50; width: min(460px, calc(100vw - 32px)); background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 12px; box-shadow: var(--shadow-lg); padding: 10px 12px; font-size: 13px; }
+.off-barra.sync { border-left-color: var(--accent); }
+.off-barra.erro { border-left-color: var(--bad); }
+.off-cab { display: flex; align-items: center; gap: 10px; }
+.off-cab > span:nth-child(2) { flex: 1; }
+.off-bola { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex: none; }
+.off-barra.sync .off-bola { background: var(--accent); animation: off-pulsa 1.2s ease-in-out infinite; }
+.off-barra.erro .off-bola { background: var(--bad); }
+@keyframes off-pulsa { 50% { opacity: .35; } }
+.off-lista, .off-nota { display: none; }
+.off-barra.aberta .off-lista { display: flex; flex-direction: column; gap: 6px; list-style: none; margin: 10px 0 0; padding: 0; max-height: 40vh; overflow: auto; }
+.off-barra.aberta .off-nota { display: block; margin: 8px 0 0; font-size: 11.5px; color: var(--muted); }
+.off-lista li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 8px; border-radius: 8px; background: var(--panel-2); }
+.off-lista li small { color: var(--muted); }
+.off-lista li.erro { background: var(--bad-soft); }
+.off-lista .off-motivo { color: var(--bad) !important; font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .off-barra.sync .off-bola { animation: none; } }
+@media print { .off-barra { display: none !important; } }
+
+/* instalar como app */
+.instalar-btn { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--side-muted); border-color: rgba(255, 255, 255, .12); font-size: 12.5px; padding: 6px 10px; }
+.instalar-btn:hover { color: #fff; }
+.instalar-btn .ic { width: 15px; height: 15px; }
+@media (max-width: 900px) { .instalar-btn span { display: none; } .instalar-btn { margin-left: 6px; padding: 7px; } }
+.inst-aviso { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; margin: 0 0 14px; border-radius: 12px;
+  background: var(--accent-soft); border: 1px solid var(--line); }
+.inst-aviso img { border-radius: 10px; flex: none; }
+.inst-aviso > div:nth-child(2) { flex: 1; min-width: 180px; }
+.inst-aviso small { color: var(--ink-2); }
+.inst-acoes { display: flex; gap: 8px; }
+.inst-passos { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.inst-end { display: flex; gap: 8px; margin-top: 4px; }
+.inst-end input { flex: 1; min-width: 0; font-family: var(--mono, monospace); font-size: 13px; }
+.inst-alerta { padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--ink); font-size: 13px; line-height: 1.5; }
+.inst-alerta code { background: var(--panel); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
+/* aberto como app (tela cheia): respeita a área do relógio/notch */
+@media (display-mode: standalone) { .side { padding-top: max(8px, env(safe-area-inset-top)); } .off-barra { bottom: max(16px, env(safe-area-inset-bottom)); } }

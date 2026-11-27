@@ -707,11 +707,13 @@ window.addEventListener('drop', e => {
 const srv = { ok: false, info: null, list: [], q: '', token: '' };
 try { srv.token = sessionStorage.getItem('diagReadToken') || ''; } catch { /* sem storage */ }
 
-async function api(path, opts = {}) {
+async function apiRede(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (srv.token) headers['X-Token'] = srv.token;
   return fetch(path, { ...opts, headers, cache: 'no-store' });
 }
+// com offline.js carregado, as impressoras funcionam sem o servidor (cópia guardada + fila de alterações)
+async function api(path, opts = {}) { return typeof apiOffline === 'function' ? apiOffline(path, opts) : apiRede(path, opts); }
 
 async function loadServerList() {
   const box = $('#server');

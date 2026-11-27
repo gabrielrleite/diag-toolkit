@@ -83,12 +83,14 @@ document.addEventListener('click', e => {
 window.addEventListener('beforeunload', e => { if (LD.dirty || MD.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
 // ================================================================== acesso ao servidor
-async function needServer(el) {
+async function needServer(el, opc = {}) {
   if (location.protocol === 'file:') {
     el.innerHTML = '<div class="panel"><h2>Requer o servidor</h2><p>Este módulo guarda os dados no servidor. Abra a interface pelo endereço do servidor (ex.: http://IP-DO-SERVIDOR).</p></div>';
     return false;
   }
   const r = await api('api/laudos').catch(() => null);
+  // impressoras/SELBs/suprimentos funcionam offline com a cópia guardada
+  if ((!r || r.status >= 502) && opc.offline && typeof offTemDados === 'function' && await offTemDados()) return true;
   if (!r) { el.innerHTML = '<div class="panel"><p class="err">Servidor indisponível.</p></div>'; return false; }
   if (r.status === 401) {
     el.innerHTML = `<div class="panel"><h2>Token de leitura</h2><p>Este servidor exige o token de leitura.</p>

@@ -107,6 +107,30 @@ ALERTAS (tinta/toner/caixa com 25% ou menos, impressora caiu/voltou):
   nome-dificil-de-adivinhar, e instale o app ntfy no celular). Depois
   de "Update the stack", use "Enviar alerta de teste" na aba Impressoras.
 
+IMPRESSORAS SEM CONEXÃO COM O SERVIDOR (offline):
+  As abas SELBs, Impressoras e Suprimentos continuam funcionando com a
+  última cópia salva no navegador. Alterações (cadastro do SELB, códigos,
+  pausas) ficam numa fila e são enviadas quando o servidor volta; uma
+  barra no canto da tela mostra o que está pendente.
+  - Com a página já aberta: funciona em qualquer endereço.
+  - Para ABRIR a página sem o servidor, o navegador exige HTTPS. Em
+    http://IP-DO-SERVIDOR, no Chrome/Edge de cada computador da equipe:
+      chrome://flags/#unsafely-treat-insecure-origin-as-secure
+    adicione http://IP-DO-SERVIDOR, ative e reinicie o navegador; depois
+    abra a Central uma vez com o servidor no ar.
+
+INSTALAR NO CELULAR (app):
+  Abra a Central no celular (http://IP-DO-SERVIDOR, na mesma rede/Wi-Fi)
+  e toque em "Instalar" no aviso do topo ou no botão de download do menu.
+  - Android (Chrome): menu ⋮ > Instalar app.
+  - iPhone (Safari): Compartilhar > Adicionar à Tela de Início.
+  Instalada, abre como app e a parte das impressoras funciona sem conexão.
+  Os navegadores só instalam como app de verdade em HTTPS. Em http:
+  - Android: no Chrome do celular, chrome://flags > "Insecure origins
+    treated as secure" > adicione http://IP-DO-SERVIDOR > Enabled >
+    Relaunch. Depois abra a Central e instale.
+  - iPhone: só com HTTPS (sem isso vira um atalho que precisa do servidor).
+
 MODO TREINAMENTO (Recebimentos > Treinamento):
   Ligado por padrão. Cada linha CONFERIDA guarda o que o OCR leu em Local,
   SELB e Data e o texto final (com o recorte dessas células; CPF, nome e
